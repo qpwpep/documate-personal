@@ -201,18 +201,16 @@ def make_post_synthesis_validation_node(
         updates: GraphState = {
             "retry": next_retry_context,
         }
-        updates.update(
-            apply_validation_outcome(
-                snapshot=snapshot,
-                assessment=assessment,
-                attempt=response.synthesis_attempt,
-                needs_retry=needs_retry,
-            )
+        outcome = apply_validation_outcome(
+            snapshot=snapshot,
+            assessment=assessment,
+            attempt=response.synthesis_attempt,
+            needs_retry=needs_retry,
         )
+        updates.update(outcome.updates)
         semantic_assessments = [("generated", assessment)]
-        final_response = updates.get("response")
-        if (final_response is not None and final_response.kind == "answer"
-                and final_response.result.semantic_validation is None):
+        final_response = outcome.response_to_validate
+        if final_response is not None:
             # Filtering changes the displayed body and invalidates its previous
             # semantic verdict. Recheck that exact revision before promotion.
             revised_snapshot = replace(
@@ -230,10 +228,17 @@ def make_post_synthesis_validation_node(
             # A second rejection must remove the newly rejected claims as well.
             # Stop bounded recovery with an explicit failure;
             # do not publish an unreviewed third revision as a validated answer.
-            updates.update(apply_validation_outcome(
+            revised_outcome = apply_validation_outcome(
                 snapshot=revised_snapshot, assessment=revised_assessment,
                 attempt=response.synthesis_attempt, needs_retry=False, allow_filtered_answer=False,
-            ))
+            )
+            if revised_assessment.retry_reason is None and final_response.problem is not None:
+                # Validation of the retained body cannot resolve the original
+                # source-location or retrieval failure that made it partial.
+                revised_outcome.updates["response"] = revised_outcome.updates["response"].model_copy(update={
+                    "kind": final_response.kind, "problem": final_response.problem,
+                })
+            updates.update(revised_outcome.updates)
         final_assessment = semantic_assessments[-1][1]
         if final_assessment.decision_cache:
             updates["retrieval"] = get_retrieval_state(state).model_copy(update={

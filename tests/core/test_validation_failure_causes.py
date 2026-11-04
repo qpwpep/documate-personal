@@ -1,18 +1,21 @@
 """Keep the failed answer check distinct from an already known retrieval gap."""
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from src.core.answer_schema import finalize_answer, text_document
+from src.core.answer_schema import AnswerDocument, export_answer_text, finalize_answer, text_document
 from src.core.contracts import GraphState, PlannerState, ResponseState, RetrievalDiagnostic, RetrievalState, RetryState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.evidence import RetrievalScore, SearchHit
 from src.core.llm_errors import make_problem
 from src.core.planner_schema import PlannerOutput, RetrievalTask
-from src.core.request_contracts import AnswerContract, LayoutRequirement, RequestContract
+from src.core.request_contracts import AnswerContract, LayoutRequirement, RequestContract, SentenceCountRequirement
 from src.runtime.agent_runtime.response_assembler import ResponseAssembler
-from src.runtime.nodes.validation import make_post_synthesis_validation_node
-from tests.core.test_decisions_validation import DecisionsBoundary, _evidence, _state
+from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
+from tests.core.test_decisions_validation import DecisionsBoundary, _evidence, _state, read_decision_input
+from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
 def _partial_state() -> GraphState:
@@ -127,6 +130,89 @@ def test_accepted_partial_answer_keeps_retrieval_cause_and_body():
     assert outcome.problem.stage == "retrieval"
     assert outcome.status == "partial"
     assert state["response"].result.content == original_body
+
+
+@pytest.mark.parametrize("filtered_is_valid", [False, True])
+def test_filtered_partial_is_checked_as_the_exact_final_body(filtered_is_valid):
+    state = _partial_state()
+    response = state["response"]
+    rejected_claim = "Path.exists() creates missing directories automatically."
+    rejected = text_document(rejected_claim, basis="source", refs=[response.evidence_packet[0].id])
+    state["response"] = response.model_copy(update={
+        "result": finalize_answer(
+            AnswerDocument(blocks=[*response.result.content.blocks, *rejected.blocks]),
+            response.evidence_packet, retrieval_required=True,
+        ),
+    })
+
+    class RevisionDecisions(DecisionsBoundary):
+        def evaluate(self, **kwargs):
+            checked_body = any("rendered_response" in read_decision_input(call["input"]) for call in self.requests)
+            self.probabilities = ({"request_fulfilled": 1.0 if filtered_is_valid else 0.1}
+                                  if checked_body else {"grounded_1": 0.1})
+            return super().evaluate(**kwargs)
+
+    decisions = RevisionDecisions()
+    state.update(make_post_synthesis_validation_node(False, decisions_client=decisions)(state))
+    outcome = ResponseAssembler().assemble(response=state)
+
+    body_inputs = [read_decision_input(call["input"]) for call in decisions.requests
+                   if "rendered_response" in read_decision_input(call["input"])]
+    assert len(body_inputs) == 2
+    assert rejected_claim in json.dumps(body_inputs[0]["rendered_response"])
+    assert rejected_claim not in json.dumps(body_inputs[1]["rendered_response"])
+    assert rejected_claim not in export_answer_text(state["response"].result)
+    assert state["retry"].needs_retry is False
+    if filtered_is_valid:
+        assert outcome.status == "partial"
+        assert outcome.problem.code == "evidence_insufficient"
+        assert outcome.response.semantic_validation.passed
+    else:
+        assert outcome.status == "failed"
+        assert outcome.problem.code == "answer_validation_failed"
+        assert outcome.response is None
+    assert any("revision=filtered" in event for event in state["debug"].validation_events)
+
+
+def test_locally_rejected_draft_keeps_prepared_judgments_for_its_filtered_body():
+    state = _state(repairs=0)
+    source = state["response"].evidence_packet[0]
+    retained = text_document("Path.exists() returns True.", basis="source", refs=[source.id])
+    retained.blocks[0].content[0].sentence_scope = 1
+    contract = state["runtime"].request_contract
+    state["runtime"] = state["runtime"].model_copy(update={
+        "request_contract": contract.model_copy(update={
+            "answer": AnswerContract(sentence_counts=[SentenceCountRequirement(minimum=1, maximum=1)]),
+        }),
+    })
+    draft = state["response"].model_copy(update={
+        "result": finalize_answer(retained, [source], retrieval_required=True),
+    })
+    pre = DecisionsBoundary({"requirement_0_target_identified": 0.94,
+                             "requirement_0_target_analysis_supported": 0.93})
+    state.update(make_pre_synthesis_validation_node(
+        False, decisions_client=pre, excerpt_limits=synthesis_excerpt_limits(),
+    )(state))
+    unsupported = text_document("Unsupported second claim.", basis="source", refs=["missing-source"])
+    unsupported.blocks[0].content[0].sentence_scope = 1
+    state["response"] = draft.model_copy(update={
+        "result": finalize_answer(AnswerDocument(blocks=[*retained.blocks, *unsupported.blocks]),
+                                  [source], retrieval_required=True),
+    })
+    post = DecisionsBoundary({"requirement_0_target_identified": 0.1,
+                              "requirement_0_target_analysis_supported": 0.1})
+
+    updates = make_post_synthesis_validation_node(False, decisions_client=post)(state)
+
+    assert all("requirements" not in read_decision_input(call["input"]) for call in post.requests)
+    checked = updates["response"].result
+    assert updates["response"].kind == "answer"
+    assert checked.content == retained
+    assert [citation.evidence for citation in checked.citations] == [source]
+    assert checked.semantic_validation.passed
+    probabilities = {check.name: check.probability for check in checked.semantic_validation.checks}
+    assert probabilities["requirement_target_identified:path_exists"] == 0.94
+    assert probabilities["requirement_target_analysis_supported:path_exists"] == 0.93
 
 
 @pytest.mark.parametrize("code", ["provider_unavailable", "model_output_incomplete"])

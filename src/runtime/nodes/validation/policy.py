@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from langchain_core.messages import AIMessage
 
 from src.core.answer_schema import (
@@ -16,6 +18,14 @@ from src.runtime.nodes.retry import retrieval_subject
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
 from src.runtime.nodes.validation.route_policy import non_retryable_retrieval_problem
 from src.runtime.nodes.validation.snapshot import detect_missing_requirement_coverage
+
+
+@dataclass(slots=True)
+class ValidationOutcome:
+    """Separate publishable updates from a changed body that still needs checking."""
+
+    updates: GraphState = field(default_factory=dict)
+    response_to_validate: ResponseState | None = None
 
 
 def build_response_updates(
@@ -95,9 +105,9 @@ def add_retrieval_gap_issues(snapshot: ValidationSnapshot, result: AnswerRespons
 def apply_validation_outcome(
     *, snapshot: ValidationSnapshot, assessment: ValidationAssessment,
     attempt: int, needs_retry: bool, allow_filtered_answer: bool = True,
-) -> GraphState:
+) -> ValidationOutcome:
     if needs_retry:
-        return {}
+        return ValidationOutcome()
     result = assessment.checked_result
     packet = snapshot.evidence_packet
     contract = snapshot.request_contract
@@ -131,16 +141,16 @@ def apply_validation_outcome(
         )
 
     if assessment.retry_reason is None and result is not None:
-        return checked_response_updates(result)
+        return ValidationOutcome(updates=checked_response_updates(result))
 
     if (contract is None or not contract.can_prepare_body()
             or snapshot.response_request_id != contract.request_id
             or snapshot.response_contract_revision != contract.revision):
-        return build_followup_updates(
+        return ValidationOutcome(updates=build_followup_updates(
             "요청의 조건을 확정하지 못했습니다. 다시 요청해 주세요.", attempt=attempt, kind="failure",
             problem=make_problem("internal_error", "validation"),
             **stamp,
-        )
+        ))
 
     # A retrieval gap does not explain why the available answer was discarded.
     validation_problem = None
@@ -173,7 +183,7 @@ def apply_validation_outcome(
                 message="근거로 충분히 뒷받침되지 않거나 원문과 일치하지 않는 내용을 제외했습니다.",
             )],
         )
-        if location_failed and document.blocks:
+        if allow_filtered_answer and location_failed and document.blocks:
             # Dropping a wrong location is not completing a location answer.
             # Keep the useful body, but never promote it via another probabilistic
             # verdict after the bounded source-position repair failed.
@@ -185,13 +195,14 @@ def apply_validation_outcome(
                 )],
             )
             result = add_retrieval_gap_issues(snapshot, result)
-            return build_response_updates(
+            candidate = build_response_updates(
                 result, attempt=attempt, evidence_packet=packet,
                 evidence_requirement_map=snapshot.evidence_requirement_map, kind="failure",
                 problem=make_problem("model_output_invalid", "validation"),
                 normal_evidence_missing_requirement_ids=snapshot.normal_evidence_missing_requirement_ids,
                 **stamp,
             )
+            return ValidationOutcome(response_to_validate=candidate["response"])
         valid_paths = {check.unit_id for check in result.checks if check.reference_status != "missing"}
         contract_check = check_answer_contract(
             snapshot.request_contract.answer, document, evidence=packet,
@@ -203,13 +214,14 @@ def apply_validation_outcome(
         has_required_citations = not snapshot.terminal_failed_requirement_ids or bool(result.citations)
         if (allow_filtered_answer and document.blocks and contract_check.valid
                 and not recoverable_missing and has_required_citations):
-            return checked_response_updates(result)
+            candidate = checked_response_updates(result)
+            return ValidationOutcome(response_to_validate=candidate["response"])
 
     # Preparation approves evidence for writing, not a replacement answer.
     # Exhausted answer validation must not introduce unreviewed text or citations.
     problem = validation_problem or retrieval_problem or make_problem("model_output_invalid", "validation")
     failure = add_retrieval_gap_issues(snapshot, finalize_answer(text_document(problem.message), []))
-    return build_response_updates(
+    return ValidationOutcome(updates=build_response_updates(
         failure, attempt=attempt, evidence_packet=[], kind="failure",
         problem=problem, **stamp,
-    )
+    ))
