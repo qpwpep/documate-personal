@@ -221,6 +221,7 @@ def _validated_score_value(value: Any, *, label: str) -> float:
 class LLMJudge:
     def __init__(
         self, model_name: str, enabled: bool = True, *,
+        api_key: str | None = None,
         max_input_tokens: int = DEFAULT_JUDGE_MAX_INPUT_TOKENS,
         max_output_tokens: int = DEFAULT_JUDGE_MAX_OUTPUT_TOKENS,
     ):
@@ -237,6 +238,7 @@ class LLMJudge:
 
         self.client = ChatOpenAI(
             model=model_name,
+            api_key=api_key,
             temperature=chat_temperature(model_name),
             max_tokens=max_output_tokens,
             timeout=60,

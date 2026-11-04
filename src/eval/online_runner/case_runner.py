@@ -401,6 +401,7 @@ def run_online_benchmark(
         judge = LLMJudge(
             model_name=config.judge_model,
             enabled=config.judge_enabled,
+            api_key=get_settings().openai_api_key,
             max_input_tokens=config.judge_max_input_tokens,
             max_output_tokens=config.judge_max_output_tokens,
         )

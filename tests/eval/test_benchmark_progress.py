@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import socket
 
+import httpx
 import pytest
 import requests
+from langchain_openai import ChatOpenAI
 
 from src.app.transport_contracts import AgentResponse
 from src.core.answer_schema import AnswerDocument, finalize_answer
@@ -16,6 +20,58 @@ from src.eval.online_runner.case_runner import run_online_benchmark
 from src.eval.reporting.writer import load_run_outputs
 from src.eval.result_models import CaseResult
 from src.eval.summary_models import RunSummary
+from src.infra.settings import AppSettings
+from tests.eval.test_judge_input_budget import provider
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_standard_runner_uses_project_judge_credentials_without_environment_copy(monkeypatch, tmp_path, enabled):
+    for name in ("OPENAI_API_KEY", "OPENAI_ADMIN_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
+    settings_file = tmp_path / ".env"
+    settings_file.write_text("OPENAI_API_KEY=offline-test-key\n" if enabled else "", encoding="utf-8")
+    settings = AppSettings(_env_file=settings_file)
+    if not enabled:
+        settings = settings.model_copy(update={"openai_api_key": None})
+    monkeypatch.setattr("src.eval.online_runner.case_runner.get_settings", lambda: settings)
+    fixtures, output_root = _prepare_run(tmp_path, monkeypatch)
+    observed_requests = []
+
+    def respond(request):
+        observed_requests.append(json.loads(request.content))
+        return httpx.Response(200, json={
+            "id": "chatcmpl-project-settings", "object": "chat.completion", "created": 1,
+            "model": "fixture", "choices": [{"index": 0, "finish_reason": "stop", "message": {
+                "role": "assistant", "content": json.dumps({
+                    "score": 1.0, "reason": "The requested answer is correct.",
+                    "subscores": {name: 1.0 for name in (
+                        "answer_quality", "groundedness", "citation_traceability", "tool_choice", "format_language",
+                    )},
+                }),
+            }}], "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        })
+
+    def deny_network(*args, **kwargs):
+        raise AssertionError("Credential regression must use the HTTP fake.")
+
+    monkeypatch.setattr(socket.socket, "connect", deny_network)
+    monkeypatch.setattr(socket.socket, "connect_ex", deny_network)
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        # Preserve the owned credential argument; only replace the HTTP boundary.
+        monkeypatch.setattr("src.eval.judge_llm.ChatOpenAI", lambda **kwargs: ChatOpenAI(**(kwargs | {
+            "base_url": "https://project-settings.invalid/v1", "http_client": client,
+            "use_responses_api": False, "max_retries": 0,
+        })))
+        _, results, _ = run_online_benchmark(
+            fixtures_path=fixtures, endpoint="http://fixture", config=BenchmarkConfig(judge_enabled=enabled),
+            config_path=tmp_path / "config.toml", output_root=output_root, track="smoke",
+        )
+
+    assert [result.judge_status for result in results] == ["succeeded" if enabled else "disabled"] * 2
+    assert len(observed_requests) == (2 if enabled else 0)
+    assert "OPENAI_API_KEY" not in os.environ
 
 
 def _prepare_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, interrupt: bool = False,
