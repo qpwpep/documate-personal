@@ -110,7 +110,7 @@ def test_authority_repair_identifies_the_unsupported_requirement_and_its_evidenc
             },
             "slack_recipient": {"state": "omitted"},
             "answer": {
-                "content": [], "sentence_counts": [], "preferences": [],
+                "content": [], "sentence_counts": [], "citation_scope": None, "preferences": [],
                 "format": [{"kind": "code_block", "mode": "forbidden", "value": None, "evidence_ids": ["e2"]}],
             },
             "evidence": [

@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from src.core.answer_schema import AnswerDocument, AnswerResponse, iter_content_units
 from src.core.answer_schema.rendering import content_unit_markdown
+from src.core.documents import DocumentElementKind
 from src.core.evidence import EvidenceRef
 from src.core.python_source import PythonSourceMap
 from src.core.sentence_counts import sentence_count_issues
@@ -116,12 +117,24 @@ class SentenceCountRequirement(ContractModel):
         return self
 
 
+class CitationScope(ContractModel):
+    """User-selected source element kinds permitted in actual answer citations."""
+
+    allowed_kinds: tuple[DocumentElementKind, ...] = Field(
+        min_length=1, description="Allowed kinds of cited source elements, not output layout or file extensions. For code-only citations use ['code']; do not repeat this constraint as custom content. Retrieval route and file selection remain in retrieval requirements.",
+    )
+    evidence_ids: tuple[str, ...] = ()
+
+
 class AnswerContract(ContractModel):
     """Content, presentation and soft preferences stay independent of retrieval."""
 
     content: tuple[ContentRequirement, ...] = ()
     format: tuple[FormatConstraint, ...] = ()
     sentence_counts: tuple[SentenceCountRequirement, ...] = ()
+    citation_scope: CitationScope | None = Field(
+        default=None, description="Explicit user constraint on the kinds of source elements the answer may cite. Null imposes no kind restriction for a new request and preserves the existing scope for a pending request. A replacement requires current user evidence scoped to answer.citation_scope.",
+    )
     preferences: tuple[str, ...] = ()
 
     @model_validator(mode="after")
@@ -180,6 +193,8 @@ class _RequestFacts(ContractModel):
             raise ValueError("contract evidence ids must be unique")
         references = [self.actions.save_text, self.actions.slack_notify,
                       *self.answer.content, *self.answer.format, *self.answer.sentence_counts]
+        if self.answer.citation_scope is not None:
+            references.append(self.answer.citation_scope)
         if hasattr(self.body, "evidence_ids"):
             references.append(self.body)
         if hasattr(self.slack_recipient, "evidence_ids"):
@@ -219,6 +234,9 @@ class _RequestFacts(ContractModel):
             for requirement in requirements:
                 allowed = {"negation", "correction", "instruction"} if requirement.mode == "forbidden" else {"instruction", "correction", "reference"}
                 require_support(requirement.evidence_ids, f"answer.{group}.{requirement.kind}", allowed)
+        if self.answer.citation_scope is not None:
+            require_support(self.answer.citation_scope.evidence_ids, "answer.citation_scope",
+                            {"instruction", "negation", "correction", "reference"})
         if self.relation == "cancel" and any(
             action.intent == "requested" for action in (self.actions.save_text, self.actions.slack_notify)
         ):
@@ -408,7 +426,8 @@ def check_answer_contract(contract: AnswerContract, document: Any, *, evidence: 
         child.type == "code_inline"
         for token in markdown_tokens for child in token.children or []
     )
-    code_sources = {item.id: item for item in evidence if item.element.kind == "code"}
+    evidence_by_id = {item.id: item for item in evidence}
+    code_sources = {key: item for key, item in evidence_by_id.items() if item.element.kind == "code"}
     # A quoted native statement is still code when displayed inside a paragraph.
     # Require a complete statement in this unit's own selected source range:
     # filenames, identifier fragments and strings inside code are not proof.
@@ -452,6 +471,11 @@ def check_answer_contract(contract: AnswerContract, document: Any, *, evidence: 
     if has_code:
         present["code"] = True
     check = ContractCheck()
+    if contract.citation_scope is not None and any(
+        evidence_by_id[reference].element.kind not in contract.citation_scope.allowed_kinds
+        for unit in units for reference in unit.refs if reference in evidence_by_id
+    ):
+        check.forbidden_present.append("citation_scope")
     check.missing_required.extend(sentence_count_issues(document, contract.sentence_counts, partial=partial))
     check.unchecked_semantic.extend(
         f"required:sentence_scope:{index}"

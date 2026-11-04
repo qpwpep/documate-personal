@@ -115,6 +115,7 @@ def _build_turn_contract_block(contract: RequestContract, action_rules: list[str
             "content": {"__all__": {"evidence_ids", "replaces"}},
             "format": {"__all__": {"evidence_ids"}},
             "sentence_counts": {"__all__": {"evidence_ids"}},
+            "citation_scope": {"evidence_ids"},
         },
     })
     record["answer"]["sentence_counts"] = [

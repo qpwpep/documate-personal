@@ -678,6 +678,10 @@ def assess_post_semantics(
         "Check the requested operation and language. Ignore unavailable-target completion, numeric sentence counts, "
         "grounding and the separately assessed content/format conditions. Rendered notices disclose missing evidence. "
         "A faithful paraphrase of the requested supported fact satisfies this check. "
+        "Preserve explicit source-use restrictions in the body instruction: compare every displayed citation "
+        "with its cited_sources route, kind and source identity. For example, a request to cite only uploaded "
+        "code excludes a Markdown/text source even when it belongs to the same uploaded notebook and its "
+        "claim is factually supported. Relevance and truthful grounding do not waive the requested citation scope. "
         + sentence_scope + documentation_scope
     )
     if body is not None and body.kind == "extract":

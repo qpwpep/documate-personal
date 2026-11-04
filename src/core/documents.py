@@ -118,11 +118,14 @@ class TableData(BaseModel):
         return self
 
 
+DocumentElementKind = Literal["heading", "paragraph", "list", "code", "table", "image"]
+
+
 class DocumentElement(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     element_id: str = Field(min_length=1)
-    kind: Literal["heading", "paragraph", "list", "code", "table", "image"]
+    kind: DocumentElementKind
     text: str = ""
     parent_id: str | None = None
     order: int = Field(default=0, ge=0)

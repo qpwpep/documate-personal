@@ -161,6 +161,8 @@ def _answer_facts(answer: AnswerContract) -> dict[str, object]:
         "content": tuple(item.model_dump(exclude={"evidence_ids"}) for item in answer.content),
         "format": tuple(item.model_dump(exclude={"evidence_ids"}) for item in answer.format),
         "sentence_counts": tuple(item.model_dump(exclude={"evidence_ids"}) for item in answer.sentence_counts),
+        "citation_scope": (answer.citation_scope.model_dump(exclude={"evidence_ids"})
+                           if answer.citation_scope is not None else None),
         "preferences": answer.preferences,
     }
 

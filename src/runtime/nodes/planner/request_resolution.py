@@ -70,6 +70,10 @@ def _bind_local_evidence(proposal: WireRequestContract, *, request_id: str, revi
     for group in ("content", "format", "sentence_counts"):
         for item in data["answer"][group]:
             item["evidence_ids"] = tuple(ids[key] for key in item["evidence_ids"])
+    if data["answer"]["citation_scope"] is not None:
+        data["answer"]["citation_scope"]["evidence_ids"] = tuple(
+            ids[key] for key in data["answer"]["citation_scope"]["evidence_ids"]
+        )
     if "evidence_ids" in data["body"]:
         data["body"]["evidence_ids"] = tuple(ids[key] for key in data["body"]["evidence_ids"])
     if "evidence_ids" in data["slack_recipient"]:
@@ -253,9 +257,20 @@ def _merge_pending(proposal: WireRequestContract, pending, *, current_turn_id: s
             # Keep scope indices stable for a prepared answer and its citations.
             sentence_counts[matching] = item
 
+    citation_scope = original.answer.citation_scope
+    if proposal.answer.citation_scope is not None:
+        if not any(
+            key in current_ids and evidence[key].interpretation in {"instruction", "negation", "correction", "reference"}
+            and evidence_scope_covers(evidence[key].scope, "answer.citation_scope")
+            for key in proposal.answer.citation_scope.evidence_ids
+        ):
+            raise ValueError("pending citation scope needs a new user instruction to change")
+        citation_scope = proposal.answer.citation_scope
+
     answer = AnswerContract(content=content_requirements(original.answer.content, proposal.answer.content),
                             format=format_requirements(original.answer.format, proposal.answer.format),
                             sentence_counts=tuple(sentence_counts),
+                            citation_scope=citation_scope,
                             preferences=tuple(dict.fromkeys([*original.answer.preferences, *proposal.answer.preferences])))
     body = proposal.body
     neutral_body = isinstance(body, ComposeBody) and not body.instruction.strip() and not body.evidence_ids
@@ -307,6 +322,8 @@ def _merge_pending(proposal: WireRequestContract, pending, *, current_turn_id: s
     retained_ids = set(getattr(body, "evidence_ids", ()))
     for item in (*actions.values(), *answer.content, *answer.format, *answer.sentence_counts):
         retained_ids.update(item.evidence_ids)
+    if answer.citation_scope is not None:
+        retained_ids.update(answer.citation_scope.evidence_ids)
     retained_ids.update(getattr(recipient, "evidence_ids", ()))
     evidence = {key: item for key, item in evidence.items() if key in retained_ids or item.turn_id == current_turn_id}
     return WireRequestContract.model_validate({

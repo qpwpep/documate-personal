@@ -87,3 +87,24 @@ def test_conditional_transform_allows_an_already_satisfied_unchanged_document():
     updates = make_post_synthesis_validation_node(False, decisions_client=DecisionsBoundary())(state)
 
     assert updates["response"].kind == "answer"
+
+
+def test_citation_scope_keeps_actual_source_kind_and_independently_blocks_truthful_body():
+    state = _state()
+    instruction = "첨부 코드만 인용해서 설명해줘."
+    state["runtime"] = state["runtime"].model_copy(update={
+        "request_contract": state["runtime"].request_contract.model_copy(update={
+            "body": ComposeBody(instruction=instruction),
+        }),
+    })
+    boundary = DecisionsBoundary({"request_fulfilled": 0.1})
+
+    updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
+
+    body, = [json.loads(call["input"]) for call in boundary.requests
+             if any(question["name"] == "request_fulfilled" for question in call["questions"])]
+    assert body["confirmed_request"]["body"]["instruction"] == instruction
+    source, = body["units"][0]["cited_sources"]
+    assert source["kind"] == "paragraph"
+    assert source["route"] == "docs"
+    assert updates["retry"].needs_retry
