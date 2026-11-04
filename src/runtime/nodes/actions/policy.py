@@ -71,6 +71,8 @@ def select_slack_delivery(
             return select_slack_delivery(request_id=request_id, intent=unresolved,
                                          request_recipient=None, default=default)
         selector, source = intent.selector, "user_text"
+    elif intent.state == "configured":
+        selector, source = intent.selector, "request_input"
     elif selector_input is not None:
         selector, source = selector_input, "request_input"
         intent = ExplicitRecipient(selector=selector)

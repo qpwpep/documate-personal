@@ -14,7 +14,7 @@ from src.core.answer_schema.rendering import content_unit_markdown
 from src.core.evidence import EvidenceRef
 from src.core.python_source import PythonSourceMap
 from src.core.sentence_counts import sentence_count_issues
-from src.core.slack_contract import ExplicitRecipient, OmittedRecipient, RecipientIntent, UnresolvedRecipient
+from src.core.slack_contract import ConfiguredRecipient, ExplicitRecipient, OmittedRecipient, RecipientIntent, UnresolvedRecipient
 from src.core.request_bodies import (
     AcknowledgeBody, AnswerReference, BodyPlan, BoundAnswerReference, BoundInputText, ComposeBody,
     CopyAnswerBody, CopyInputBody, ExtractBody, InputTextReference, TransformAnswerBody,
@@ -209,7 +209,7 @@ class _RequestFacts(ContractModel):
             if action.intent in {"requested", "forbidden"}:
                 allowed = {"instruction", "correction", "reference"} if action.intent == "requested" else {"negation", "correction", "instruction"}
                 require_support(action.evidence_ids, f"actions.{name}", allowed)
-        if isinstance(self.slack_recipient, (ExplicitRecipient, UnresolvedRecipient)):
+        if isinstance(self.slack_recipient, (ExplicitRecipient, ConfiguredRecipient, UnresolvedRecipient)):
             allowed = {"instruction", "correction", "reference"}
             if isinstance(self.slack_recipient, UnresolvedRecipient):
                 allowed.add("negation")
@@ -230,7 +230,7 @@ class WireRequestContract(_RequestFacts):
     """Model interpretation: only user facts and offered reference selectors."""
 
     body: WireBodyPlan = Field(default_factory=ComposeBody)
-    slack_recipient: RecipientIntent = Field(description="This turn's recipient intent: omitted only if no recipient is specified; explicit requires one selector and scoped user evidence; unresolved preserves ambiguous, invalid or unverified recipient text. Never replace an unresolved recipient with omitted. For pending requests omitted means keep the existing recipient, not use a default.")
+    slack_recipient: RecipientIntent = Field(description="This turn's recipient intent: omitted only if no recipient is specified; explicit requires one selector from the user's text and scoped user evidence; configured selects the exact offered configured_recipient with the user's referring phrase and scoped evidence; unresolved preserves ambiguous, invalid or unverified recipient text. Never replace an unresolved recipient with omitted or configured. For pending requests omitted means keep the existing recipient, not use a default.")
 
 
 class RequestContract(_RequestFacts):

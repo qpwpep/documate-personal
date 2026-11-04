@@ -52,6 +52,15 @@ class ExplicitRecipient(SlackModel):
     evidence_ids: tuple[str, ...] = ()
 
 
+class ConfiguredRecipient(SlackModel):
+    """An explicit reference to the exact recipient offered by this request's UI."""
+
+    state: Literal["configured"] = "configured"
+    selector: RecipientSelector
+    raw_input: str = Field(min_length=1, description="Exact user phrase selecting the configured recipient, not a new name or ID.")
+    evidence_ids: tuple[str, ...] = ()
+
+
 class UnresolvedRecipient(SlackModel):
     state: Literal["unresolved"] = "unresolved"
     raw_input: str
@@ -60,7 +69,7 @@ class UnresolvedRecipient(SlackModel):
 
 
 RecipientIntent = Annotated[
-    OmittedRecipient | ExplicitRecipient | UnresolvedRecipient, Field(discriminator="state")
+    OmittedRecipient | ExplicitRecipient | ConfiguredRecipient | UnresolvedRecipient, Field(discriminator="state")
 ]
 
 
@@ -170,8 +179,10 @@ class SlackDelivery(SlackModel):
         if selection is not None:
             if self.intent.state == "unresolved":
                 raise ValueError("an unresolved recipient cannot have a selected target")
-            if self.intent.state == "explicit" and self.intent.selector != selection.selector:
-                raise ValueError("selection must preserve the explicit recipient")
+            if self.intent.state in {"explicit", "configured"} and self.intent.selector != selection.selector:
+                raise ValueError("selection must preserve the requested recipient")
+            if self.intent.state == "configured" and selection.source != "request_input":
+                raise ValueError("a configured reference must select the offered request input")
             if selection.source == "configured_default" and self.intent.state != "omitted":
                 raise ValueError("only an omitted recipient can use the configured default")
             if self.intent.state == "omitted" and selection.source != "configured_default":

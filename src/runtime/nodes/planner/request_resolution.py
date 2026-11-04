@@ -4,6 +4,8 @@ import hashlib
 import re
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from src.core.answer_schema import text_document
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.runtime import get_runtime_state
@@ -15,7 +17,7 @@ from src.core.request_contracts import (
     WireCopyAnswerBody, WireCopyInputBody, WireRequestContract, WireTransformAnswerBody,
     WireTransformInputBody, check_answer_contract, evidence_scope_covers,
 )
-from src.core.slack_contract import ExplicitRecipient, OmittedRecipient, UnresolvedRecipient
+from src.core.slack_contract import ConfiguredRecipient, ExplicitRecipient, OmittedRecipient, RecipientSelector, UnresolvedRecipient
 
 
 def _missing(slot: str, reason: str, question: str) -> MissingInformation:
@@ -339,12 +341,22 @@ def resolve_request_contract(proposal: WireRequestContract, state: GraphState, *
         missing.append(_missing("pending_request", "not_provided", "보충하거나 취소할 요청을 특정하지 못했습니다. 해당 요청을 알려 주세요."))
 
     recipient = proposal.slack_recipient
-    if isinstance(recipient, ExplicitRecipient):
+    if isinstance(recipient, (ExplicitRecipient, ConfiguredRecipient)):
         retained = (original is not None and recipient.model_dump(exclude={"evidence_ids"})
                     == original.slack_recipient.model_dump(exclude={"evidence_ids"}))
-        if not retained and not current_recipient_evidence_ids(proposal, current_turn_id=runtime.current_turn_id,
-                                                               current_utterance=runtime.user_input):
-            recipient = UnresolvedRecipient(raw_input=recipient.selector.value, reason="unverified",
+        configured_matches = True
+        if isinstance(recipient, ConfiguredRecipient) and not retained:
+            configured = runtime.session_metadata.slack_recipient
+            try:
+                offered = RecipientSelector.model_validate(configured.model_dump()) if configured is not None else None
+            except ValidationError:
+                offered = None
+            configured_matches = offered == recipient.selector
+        if not retained and (not configured_matches or not current_recipient_evidence_ids(
+            proposal, current_turn_id=runtime.current_turn_id, current_utterance=runtime.user_input,
+        )):
+            raw_input = recipient.raw_input if isinstance(recipient, ConfiguredRecipient) else recipient.selector.value
+            recipient = UnresolvedRecipient(raw_input=raw_input, reason="unverified",
                                             evidence_ids=recipient.evidence_ids)
     if isinstance(recipient, UnresolvedRecipient):
         missing.append(_missing("slack_destination", "unknown_id" if recipient.reason == "unverified" else "unclear",
@@ -368,7 +380,7 @@ def resolve_request_contract(proposal: WireRequestContract, state: GraphState, *
         existing = unique.get(item.slot)
         if existing is None or missing_priority[item.reason] > missing_priority[existing.reason]:
             unique[item.slot] = item
-    if isinstance(recipient, ExplicitRecipient) and "slack_destination" in unique and unique["slack_destination"].reason == "not_provided":
+    if isinstance(recipient, (ExplicitRecipient, ConfiguredRecipient)) and "slack_destination" in unique and unique["slack_destination"].reason == "not_provided":
         del unique["slack_destination"]
     gap = unique.get("slack_destination")
     if gap is not None and gap.reason != "not_provided" and not isinstance(recipient, UnresolvedRecipient):

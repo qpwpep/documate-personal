@@ -252,7 +252,7 @@ planner의 `PlannedDocsLibrary`는 지원 출처의 canonical ID와 `unsupported
 | `answer` | 내용 요구·출력 형식별 필수/금지/선호 및 일반 선호 |
 | `evidence` | 실제 사용자 발화 ID·원문 구절·적용 범위와 지시/부정/언급/인용/정정/참조 구분 |
 | `relation`, `target_request_id` | 새 요청 `new`, 정정 `correction`, 실제 미완료 요청 보충 `supplement`, 취소 `cancel`. 보류 요청 ID가 일치할 때만 같은 요청의 다음 revision으로 반영 |
-| `slack_recipient` | `omitted` / `explicit` / `unresolved`로 보존한 수신자 의도와 근거. 수신자 지정만으로 전송을 요청한 것은 아님 |
+| `slack_recipient` | `omitted` / `explicit` / `configured` / `unresolved`로 보존한 수신자 의도와 근거. `configured`는 현재 요청 설정을 지칭한 원문 구절과 설정의 종류·값을 바인딩하며, 미해결 대상을 설정값으로 대체하지 않음. 수신자 지정만으로 전송을 요청한 것은 아님 |
 | `missing_info` | 부족한 정보의 slot·원인·질문. 이미 해석된 행동 의사와 출력 요구를 유지 |
 | `status`, 준비 상태 | 서버 파생값. 본문 준비 가능성과 각 행동의 실행 준비를 별도로 계산 |
 
