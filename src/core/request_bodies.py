@@ -13,6 +13,13 @@ BODY_INSTRUCTION_DESCRIPTION = (
     "saving or sending when they are quoted payload or the subject being explained."
 )
 
+CHANGE_REQUIREMENT_DESCRIPTION = (
+    "required means the user requests an actual change to the displayed body or its structure, "
+    "such as a further rewrite, replacement or translation. if_needed means the user requests "
+    "a target condition and permits the original body when it already satisfies that condition, "
+    "such as ensuring one line or a specified layout. Delivery alone is never a body change."
+)
+
 
 class BodyModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -85,6 +92,7 @@ class CopyInputBody(BodyModel):
 class WireTransformInputBody(BodyModel):
     kind: Literal["transform_input"] = "transform_input"
     source: InputTextReference
+    change_requirement: Literal["required", "if_needed"] = Field(description=CHANGE_REQUIREMENT_DESCRIPTION)
     instruction: str = Field(min_length=1, description=(
         "The requested translation, edit or layout-only change. If wording must stay literal while adding "
         "a code block/list/table, preserve the selected payload and change only its presentation. "
@@ -96,6 +104,7 @@ class WireTransformInputBody(BodyModel):
 class TransformInputBody(BodyModel):
     kind: Literal["transform_input"] = "transform_input"
     source: BoundInputText
+    change_requirement: Literal["required", "if_needed"] = Field(description=CHANGE_REQUIREMENT_DESCRIPTION)
     instruction: str = Field(min_length=1, description=BODY_INSTRUCTION_DESCRIPTION)
     evidence_ids: tuple[str, ...] = ()
 
@@ -123,6 +132,7 @@ class WireTransformAnswerBody(BodyModel):
     """
     kind: Literal["transform_answer"] = "transform_answer"
     source: AnswerReference | OrdinalAnswerReference
+    change_requirement: Literal["required", "if_needed"] = Field(description=CHANGE_REQUIREMENT_DESCRIPTION)
     instruction: str = Field(min_length=1, description=(
         "The requested change to the answer's actual wording, language, structure or claims. "
         "TXT serialization or including existing sources/limitations is not a body change; use copy_answer. "
@@ -134,6 +144,7 @@ class WireTransformAnswerBody(BodyModel):
 class TransformAnswerBody(BodyModel):
     kind: Literal["transform_answer"] = "transform_answer"
     source: BoundAnswerReference
+    change_requirement: Literal["required", "if_needed"] = Field(description=CHANGE_REQUIREMENT_DESCRIPTION)
     instruction: str = Field(min_length=1, description=BODY_INSTRUCTION_DESCRIPTION)
     evidence_ids: tuple[str, ...] = ()
 
@@ -164,10 +175,12 @@ def body_to_wire(body: BodyPlan) -> WireBodyPlan:
         selector = InputTextReference(turn_id=body.source.turn_id, quote=body.source.text)
         if isinstance(body, CopyInputBody):
             return WireCopyInputBody(source=selector)
-        return WireTransformInputBody(source=selector, instruction=body.instruction, evidence_ids=body.evidence_ids)
+        return WireTransformInputBody(source=selector, instruction=body.instruction,
+                                      change_requirement=body.change_requirement, evidence_ids=body.evidence_ids)
     if isinstance(body, (CopyAnswerBody, TransformAnswerBody)):
         selector = AnswerReference(ref=body.source.ref)
         if isinstance(body, CopyAnswerBody):
             return WireCopyAnswerBody(source=selector)
-        return WireTransformAnswerBody(source=selector, instruction=body.instruction, evidence_ids=body.evidence_ids)
+        return WireTransformAnswerBody(source=selector, instruction=body.instruction,
+                                       change_requirement=body.change_requirement, evidence_ids=body.evidence_ids)
     return body

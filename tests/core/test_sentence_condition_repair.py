@@ -39,7 +39,7 @@ def _planner_reply(messages: list[BaseMessage]) -> InitialPlannerOutput:
     context = next(message for message in messages if message.name == "request_context")
     user = json.loads(context.content.split("\n", 1)[1])["user_turn_ledger"][-1]
     contract = WireRequestContract.model_validate({
-        "body": {"kind": "transform_answer", "source": {"ref": "previous"},
+        "body": {"kind": "transform_answer", "change_requirement": "if_needed", "source": {"ref": "previous"},
                  "instruction": "이전 답변에 등장하는 민수와 지수의 행동을 요약한다.", "evidence_ids": ["request"]},
         "actions": {
             "save_text": {"intent": "requested", "evidence_ids": ["request"]},

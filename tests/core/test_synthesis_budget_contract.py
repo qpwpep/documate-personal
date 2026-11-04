@@ -111,7 +111,7 @@ def test_transform_retains_complete_bound_citations_beyond_the_retrieval_budget(
     state = _state(_long_hits())
     state["runtime"] = state["runtime"].model_copy(update={
         "previous_response": previous,
-        "request_contract": RequestContract(body=TransformAnswerBody(
+        "request_contract": RequestContract(body=TransformAnswerBody(change_requirement="if_needed",
             source=BoundAnswerReference(ref="previous", response_hash=previous.content_hash),
             instruction="Retain the exact source wording.",
         )),
@@ -182,7 +182,7 @@ def test_changed_bound_source_response_invalidates_prepared_ranges():
     previous = finalize_answer(text_document(original.excerpt, basis="excerpt", refs=[original.id]),
                                [original], retrieval_required=True)
     state = _state([])
-    contract = RequestContract(body=TransformAnswerBody(
+    contract = RequestContract(body=TransformAnswerBody(change_requirement="if_needed",
         source=BoundAnswerReference(ref="previous", response_hash=previous.content_hash),
         instruction="Summarize this answer.",
     ))
@@ -193,7 +193,7 @@ def test_changed_bound_source_response_invalidates_prepared_ranges():
     replacement = finalize_answer(text_document("A revised bound answer."), [])
     state["runtime"] = state["runtime"].model_copy(update={
         "previous_response": replacement,
-        "request_contract": contract.model_copy(update={"body": TransformAnswerBody(
+        "request_contract": contract.model_copy(update={"body": TransformAnswerBody(change_requirement="if_needed",
             source=BoundAnswerReference(ref="previous", response_hash=replacement.content_hash),
             instruction="Summarize this answer.",
         )}),

@@ -108,7 +108,8 @@ def _bind_body(body, runtime, utterances, original=None, *, declared_missing=())
             return UnresolvedBody(question=missing.question, instruction=getattr(body, "instruction", "")), (missing,)
         if isinstance(body, WireCopyInputBody):
             return CopyInputBody(source=selected), ()
-        return TransformInputBody(source=selected, instruction=body.instruction, evidence_ids=body.evidence_ids), ()
+        return TransformInputBody(source=selected, instruction=body.instruction,
+                                  change_requirement=body.change_requirement, evidence_ids=body.evidence_ids), ()
     if isinstance(body, (WireCopyAnswerBody, WireTransformAnswerBody)):
         ref = body.source.ref
         if isinstance(body.source, OrdinalAnswerReference):
@@ -123,7 +124,8 @@ def _bind_body(body, runtime, utterances, original=None, *, declared_missing=())
         source = BoundAnswerReference(ref=ref, response_hash=response.content_hash)
         if isinstance(body, WireCopyAnswerBody):
             return CopyAnswerBody(source=source), ()
-        return TransformAnswerBody(source=source, instruction=body.instruction, evidence_ids=body.evidence_ids), ()
+        return TransformAnswerBody(source=source, instruction=body.instruction,
+                                   change_requirement=body.change_requirement, evidence_ids=body.evidence_ids), ()
     if isinstance(body, UnresolvedBody):
         return body, (() if any(item.slot != "slack_destination" for item in declared_missing)
                       else (_missing("subject", "unclear", body.question),))
@@ -162,8 +164,8 @@ def _apply_requested_copy_layout(body, body_request, answer, runtime):
     )
     transform = TransformInputBody if isinstance(body, CopyInputBody) else TransformAnswerBody
     wire_transform = WireTransformInputBody if isinstance(body, CopyInputBody) else WireTransformAnswerBody
-    return (transform(source=body.source, instruction=instruction, evidence_ids=evidence_ids),
-            wire_transform(source=body_request.source, instruction=instruction, evidence_ids=evidence_ids))
+    return (transform(source=body.source, instruction=instruction, change_requirement="if_needed", evidence_ids=evidence_ids),
+            wire_transform(source=body_request.source, instruction=instruction, change_requirement="if_needed", evidence_ids=evidence_ids))
 
 
 def _merge_pending(proposal: WireRequestContract, pending, *, current_turn_id: str, current_utterance: str):

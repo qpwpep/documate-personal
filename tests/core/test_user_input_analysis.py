@@ -49,7 +49,7 @@ def _state(body_kind="compose"):
     body = ComposeBody(instruction=instruction, evidence_ids=(INTERPRETATION_ID,))
     source_response = None
     if body_kind == "transform_input":
-        body = TransformInputBody(
+        body = TransformInputBody(change_requirement="required",
             source=BoundInputText(
                 turn_id="user-code", text=CODE, start=0, end=len(CODE),
                 content_hash=hashlib.sha256(CODE.encode()).hexdigest(),
@@ -58,7 +58,7 @@ def _state(body_kind="compose"):
         )
     elif body_kind == "transform_answer":
         source_response = finalize_answer(text_document(CODE, basis="interaction"), [])
-        body = TransformAnswerBody(
+        body = TransformAnswerBody(change_requirement="required",
             source=BoundAnswerReference(ref="previous", response_hash=source_response.content_hash),
             instruction=instruction, evidence_ids=(INTERPRETATION_ID,),
         )

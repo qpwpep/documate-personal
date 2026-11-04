@@ -248,6 +248,7 @@ planner의 `PlannedDocsLibrary`는 지원 출처의 canonical ID와 `unsupported
 | `request_id`, `revision` | 서버가 부여하는 요청 계약 ID와 revision. 보충·정정 시 ID를 유지하고 revision을 올림. HTTP 실행 ID와 구분하며 모델 출력에는 포함하지 않음 |
 | `actions` | 저장·Slack 각각의 `requested`, `forbidden`, `not_requested`, `unresolved` |
 | `body` | `compose`, `copy_input`, `transform_input`, `copy_answer`, `transform_answer`, `extract`, `acknowledge`, `unresolved`의 타입별 합집합. 각 타입이 유효한 출처와 필요한 작업 지시만 허용 |
+| `body.change_requirement` | 두 변환 타입의 필수 값. `required`는 표시 본문이나 구조의 실제 변경을 요구하고, `if_needed`는 원본이 이미 요청 조건을 충족하면 같은 본문을 허용 |
 | `answer` | 내용 요구·출력 형식별 필수/금지/선호 및 일반 선호 |
 | `evidence` | 실제 사용자 발화 ID·원문 구절·적용 범위와 지시/부정/언급/인용/정정/참조 구분 |
 | `relation`, `target_request_id` | 새 요청 `new`, 정정 `correction`, 실제 미완료 요청 보충 `supplement`, 취소 `cancel`. 보류 요청 ID가 일치할 때만 같은 요청의 다음 revision으로 반영 |

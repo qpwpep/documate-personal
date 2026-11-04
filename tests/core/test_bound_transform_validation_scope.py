@@ -23,7 +23,7 @@ def _bound_edit_state():
     previous = finalize_answer(text_document("마지막 줄: 42"), [])
     contract = RequestContract(
         request_id=state["runtime"].request_contract.request_id,
-        body={"kind": "transform_answer", "source": {"ref": "previous", "response_hash": previous.content_hash},
+        body={"kind": "transform_answer", "change_requirement": "required", "source": {"ref": "previous", "response_hash": previous.content_hash},
               "instruction": "마지막 줄의 42만 43으로 바꾸고 나머지는 유지한다.", "evidence_ids": ["edit"]},
         evidence=[ContractEvidence(id="edit", turn_id="current", quote=REQUEST,
                                    scope="current_request", interpretation="instruction")],
@@ -81,7 +81,7 @@ def test_operations_with_other_context_dependencies_keep_the_existing_full_conte
     runtime = state["runtime"]
     if context_dependency == "transform_input":
         text = "마지막 줄: 42"
-        body = TransformInputBody(source=BoundInputText(
+        body = TransformInputBody(change_requirement="required", source=BoundInputText(
             turn_id="current", text=text, start=0, end=len(text),
             content_hash=hashlib.sha256(text.encode()).hexdigest(),
         ), instruction=runtime.request_contract.body.instruction, evidence_ids=["edit"])

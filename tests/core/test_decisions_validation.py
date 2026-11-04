@@ -730,7 +730,7 @@ def test_transformed_answer_validation_treats_the_bound_answer_as_an_editing_sou
     state["runtime"] = state["runtime"].model_copy(update={
         "previous_response": previous,
         "request_contract": RequestContract(body={
-            "kind": "transform_answer", "source": {"ref": "previous", "response_hash": previous.content_hash},
+            "kind": "transform_answer", "change_requirement": "required", "source": {"ref": "previous", "response_hash": previous.content_hash},
             "instruction": "마지막 줄의 42만 43으로 바꾸고 나머지는 그대로 유지한다.",
         }),
     })
@@ -1205,6 +1205,7 @@ def _previous_answer_state(body_kind, *, matching_revision=True):
     }
     if body_kind == "transform_answer":
         body["instruction"] = "이전 답변을 한 문장으로 요약해 주세요."
+        body["change_requirement"] = "if_needed"
     contract = RequestContract(request_id="decisions-validation", body=body)
     state["runtime"] = state["runtime"].model_copy(update={
         "user_input": "이전 답변을 그대로 다시 보여 주세요." if body_kind == "copy_answer" else body["instruction"],

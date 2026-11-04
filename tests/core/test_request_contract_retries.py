@@ -37,7 +37,7 @@ class PlannerBoundary:
         user = _current_turn(messages)
         contract = WireRequestContract.model_validate({
             "slack_recipient": {"state": "omitted"},
-            "body": {"kind": "transform_answer", "source": {"ref": "previous"},
+            "body": {"kind": "transform_answer", "change_requirement": "if_needed", "source": {"ref": "previous"},
                      "instruction": "세 줄로 줄여줘", "evidence_ids": ["format"]},
             "actions": {"save_text": {"intent": self.save_intent, "evidence_ids": ["action"]}},
             "answer": {"format": [{"kind": "line_count", "mode": "required", "value": 3, "evidence_ids": ["format"]}]},
@@ -317,7 +317,7 @@ def test_content_supplement_preserves_completed_save_while_preparing_new_body(tm
     result = conversation.turn(
         "앞의 조건은 유지하고 빈 입력 처리도 설명에 추가해줘",
         relation="supplement", actions={},
-        body={"kind": "transform_answer", "source": {"ref": "pending"},
+        body={"kind": "transform_answer", "change_requirement": "required", "source": {"ref": "pending"},
               "instruction": "기존 시간복잡도와 공간복잡도 설명에 빈 입력 처리를 추가한다.",
               "evidence_ids": ["request"]},
         answer={"content": [

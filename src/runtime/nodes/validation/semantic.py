@@ -10,6 +10,7 @@ from src.core.answer_schema import (
     semantic_evidence_fingerprint,
 )
 from src.core.answer_schema.model_references import remap_document_source_references, source_reference_aliases
+from src.core.answer_schema.models import CodeBlock, HeadingBlock, ListBlock, ParagraphBlock, TableBlock
 from src.core.answer_export import exact_copy_ready, input_copy_snapshot
 from src.core.decisions import DecisionResult
 from src.core.evidence import EvidenceRef
@@ -310,6 +311,25 @@ def _require_bound_source(snapshot: ValidationSnapshot, *, stage: str) -> None:
         raise LLMCallError(make_problem("evidence_insufficient", stage))
 
 
+def _displayed_document(document: AnswerDocument) -> list[dict[str, object]]:
+    """Compare body wording and layout, excluding provenance and unit segmentation."""
+    blocks = []
+    for block in document.blocks:
+        if isinstance(block, ParagraphBlock):
+            blocks.append({"type": block.type, "text": " ".join(unit.text for unit in block.content)})
+        elif isinstance(block, ListBlock):
+            blocks.append({"type": block.type, "ordered": block.ordered, "items": [unit.text for unit in block.items]})
+        elif isinstance(block, CodeBlock):
+            blocks.append({"type": block.type, "language": block.language, "inline": block.inline,
+                           "text": block.content.text})
+        elif isinstance(block, HeadingBlock):
+            blocks.append({"type": block.type, "level": block.level, "text": block.content.text})
+        elif isinstance(block, TableBlock):
+            blocks.append({"type": block.type, "columns": [unit.text for unit in block.columns],
+                           "rows": [[unit.text for unit in row] for row in block.rows]})
+    return blocks
+
+
 
 
 def _post_predicate_instructions(
@@ -499,6 +519,15 @@ def assess_post_semantics(
         return
     _require_bound_source(snapshot, stage="post_synthesis_validation")
     body = snapshot.request_contract.body if snapshot.request_contract else None
+    if body is not None and body.kind in {"transform_input", "transform_answer"} and body.change_requirement == "required":
+        original = input_copy_snapshot(body.source) if body.kind == "transform_input" else snapshot.source_response
+        if _displayed_document(result.content) == _displayed_document(original.content):
+            # A probability cannot turn unchanged wording and layout into a
+            # requested edit. Provenance-only changes are not body edits.
+            assessment.missing_content.append("transform_unchanged")
+            assessment.retry_reason = "missing_content"
+            assessment.error_codes.append("VALIDATION_MISSING_CONTENT")
+            return
     input_copy = body is not None and body.kind == "copy_input"
     literal_copy = body is not None and body.kind in {"copy_input", "copy_answer"}
     source = input_copy_snapshot(snapshot.request_contract.body.source) if input_copy else snapshot.source_response

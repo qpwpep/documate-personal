@@ -59,7 +59,7 @@ def test_planner_boundary_separates_body_operations_from_delivery_instructions()
     proposal = WireRequestContract.model_validate({
         "relation": "correction",
         "slack_recipient": {"state": "omitted"},
-        "body": {"kind": "transform_answer", "source": {"ref": "previous"},
+        "body": {"kind": "transform_answer", "change_requirement": "required", "source": {"ref": "previous"},
                  "instruction": "Change only the final line's 42 to 43. Preserve every other character and all line breaks.",
                  "evidence_ids": ["change"]},
         "actions": {"save_text": {"intent": "requested", "evidence_ids": ["change"]}},

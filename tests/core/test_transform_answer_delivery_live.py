@@ -103,7 +103,7 @@ def _frozen_state(contract_variant: ContractVariant) -> GraphState:
         contract = RequestContract(
             request_id="f6579247-f8bb-441d-82b5-49072dea34eb", revision=1, relation="correction",
             actions=ActionContract(save_text=ActionRequest(intent="requested", evidence_ids=[EVIDENCE_IDS[0]])),
-            body=TransformAnswerBody(
+            body=TransformAnswerBody(change_requirement="required",
                 source=BoundAnswerReference(ref="previous", response_hash=state["runtime"].previous_response.content_hash),
                 instruction=BODY_INSTRUCTION, evidence_ids=EVIDENCE_IDS[1:],
             ),
@@ -129,7 +129,7 @@ def _frozen_state(contract_variant: ContractVariant) -> GraphState:
         contract = RequestContract(
             request_id="37df5485-cf55-43f3-9ad8-3d8729a6401e", revision=1, relation="correction",
             actions=ActionContract(save_text=ActionRequest(intent="requested", evidence_ids=[LATEST_EVIDENCE_IDS[0]])),
-            body=TransformAnswerBody(
+            body=TransformAnswerBody(change_requirement="required",
                 source=BoundAnswerReference(ref="previous", response_hash=state["runtime"].previous_response.content_hash),
                 instruction=LATEST_BODY_INSTRUCTION, evidence_ids=LATEST_EVIDENCE_IDS,
             ),

@@ -36,7 +36,7 @@ def _wire_validator(model: type[BaseModel]) -> jsonschema.Draft202012Validator:
 
 @pytest.mark.parametrize("body", [
     {"kind": "copy_input", "source": {"turn_id": "u1", "quote": "hello", "occurrence": None}},
-    {"kind": "transform_answer", "source": {"ref": "pending"}, "instruction": "Shorten"},
+    {"kind": "transform_answer", "change_requirement": "if_needed", "source": {"ref": "pending"}, "instruction": "Shorten"},
     {"kind": "extract", "instruction": "Show the source", "requirement_ids": ["req1"]},
 ])
 def test_planner_body_variants_keep_their_canonical_meaning(body):

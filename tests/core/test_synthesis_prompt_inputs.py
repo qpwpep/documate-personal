@@ -169,7 +169,7 @@ def test_transform_input_only_replaces_its_bound_occurrence_in_history():
     state = _state([], query=request)
     state["messages"] = [HumanMessage(id="source-turn", content=request)]
     state["runtime"] = state["runtime"].model_copy(update={"request_contract": RequestContract(
-        body=TransformInputBody(instruction="Translate the selected second occurrence.", source=BoundInputText(
+        body=TransformInputBody(change_requirement="required", instruction="Translate the selected second occurrence.", source=BoundInputText(
             turn_id="source-turn", text=selected, start=start, end=len(request),
             content_hash=hashlib.sha256(selected.encode()).hexdigest(),
         )),
@@ -207,7 +207,7 @@ def test_transform_answer_reuses_bound_body_and_preserves_only_semantic_limits()
                          HumanMessage(content="Summarize the previous answer.")]
     state["runtime"] = state["runtime"].model_copy(update={
         "previous_response": previous,
-        "request_contract": RequestContract(body=TransformAnswerBody(
+        "request_contract": RequestContract(body=TransformAnswerBody(change_requirement="if_needed",
             source=BoundAnswerReference(ref="previous", response_hash=previous.content_hash),
             instruction="Summarize while preserving its limitations.",
         )),

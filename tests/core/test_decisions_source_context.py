@@ -58,7 +58,7 @@ def _validation_input(evidence_packet, location, *, raw=False):
     if location.startswith("bound_"):
         state = _state(retrieval=False)
         contract = RequestContract(request_id="decisions-validation", body={
-            "kind": "transform_answer", "instruction": "이전 답변을 요약해 주세요.",
+            "kind": "transform_answer", "change_requirement": "if_needed", "instruction": "이전 답변을 요약해 주세요.",
             "source": {"ref": "previous", "response_hash": result.content_hash},
         })
         state["runtime"] = state["runtime"].model_copy(update={
@@ -290,7 +290,7 @@ def test_bound_answer_preparation_preserves_selected_sources_without_predicting_
                                [evidence], retrieval_required=True)
     saved = previous.model_dump(mode="json")
     contract = RequestContract(request_id="bound-answer", body={
-        "kind": "transform_answer", "instruction": "이전 답변을 요약해 주세요.",
+        "kind": "transform_answer", "change_requirement": "if_needed", "instruction": "이전 답변을 요약해 주세요.",
         "source": {"ref": "previous", "response_hash": previous.content_hash},
     })
     state = _state(retrieval=False)

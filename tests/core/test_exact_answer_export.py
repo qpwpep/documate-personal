@@ -41,7 +41,7 @@ class ExportPlanner:
         context = next(message for message in messages if message.name == "request_context")
         user = json.loads(context.content.split("\n", 1)[1])["user_turn_ledger"][-1]
         return InitialPlannerOutput(use_retrieval=False, tasks=[], request_contract={
-            "body": ({"kind": "transform_answer", "source": {"ref": "previous"},
+            "body": ({"kind": "transform_answer", "change_requirement": "if_needed", "source": {"ref": "previous"},
                       "instruction": "이전 답변을 요약해줘", "evidence_ids": ["export"]} if self.transform else
                      {"kind": "copy_answer", "source": {"ref": "previous"}}),
             "actions": {self.action: {"intent": "requested", "evidence_ids": ["export"]}} if self.action else {},
