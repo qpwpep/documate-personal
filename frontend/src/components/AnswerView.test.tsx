@@ -350,6 +350,20 @@ describe('AnswerView', () => {
     expect(within(contentCheck).getByText('근거 지지: 검증 안 됨')).toBeVisible();
   });
 
+  it('shows locally verified source positions without inventing a semantic probability', async () => {
+    const user = userEvent.setup();
+    render(<AnswerView response={sourceFixtures.verifiedLocation as AnswerResponse} />);
+
+    await user.click(screen.getByText('답변 정보'));
+    await user.click(screen.getByText('기술 상세'));
+    const locationCheck = screen.getByRole('region', { name: '내용 2 검증' });
+    expect(within(locationCheck).getByText(/first.py:1/)).toBeVisible();
+    expect(within(locationCheck).getByText('원문 위치: 확인됨 · 보관된 원문의 줄 위치와 일치합니다.')).toBeVisible();
+    expect(within(locationCheck).queryByText(/검증 안 됨|충족 확률/)).not.toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: '내용 1 검증' }))
+      .getByText('근거 지지: 검증 안 됨')).toBeVisible();
+  });
+
   it('summarizes partial scope and preserves every limit in collapsed details', async () => {
     const user = userEvent.setup();
     const partialResponse: AnswerResponse = {

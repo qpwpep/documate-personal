@@ -118,8 +118,9 @@ def physical_line_api(tmp_path, monkeypatch):
                                  "quote": question, "scope": "actions.save_text", "interpretation": "instruction"})
             plan = {
                 "use_retrieval": True,
-                "tasks": [{"route": "upload", "query": question if controls.inline_mode is not None else "region amount groupby sum", "k": 4,
+                "tasks": [{"route": "upload", "requirement_id": "source", "query": question if controls.inline_mode is not None else "region amount groupby sum", "k": 4,
                            "requirement": {"file_ids": [item["file_id"] for item in context_record["upload_files"]]}}],
+                "task_interpretations": [{"requirement_id": "source", "scope": "target", "aspect_roles": []}],
                 "request_contract": WireRequestContract(
                     body={"kind": "compose", "instruction": question}, answer=answer, evidence=evidence, actions=actions,
                     slack_recipient={"state": "omitted"},

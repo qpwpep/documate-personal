@@ -585,11 +585,14 @@ def assess_post_semantics(
     # Independent content, format and sentence-scope conditions remain semantic.
     # A verified copy adds no claims or citations to its bound source, whether
     # that source is user input or a previously displayed answer.
-    grounded_units = [] if copy_fidelity_verified else units
+    body_units = [] if copy_fidelity_verified else units
+    verified_locations = {check.unit_id for check in result.checks if check.support_status == "verified_location"}
+    grounded_units = {index: (unit_id, unit) for index, (unit_id, unit) in enumerate(body_units)
+                      if unit_id not in verified_locations}
     questions = []
     sources_by_question: dict[str, list[EvidenceRef]] = {}
     evaluated_units = []
-    for index, (unit_id, unit) in enumerate(grounded_units):
+    for index, (unit_id, unit) in enumerate(body_units):
         name = f"grounded_{index}"
         block_type = block_types[unit_id.partition(".")[0]]
         sources_by_question[name] = [sources[ref] for ref in unit.refs if ref in sources]
@@ -600,6 +603,10 @@ def assess_post_semantics(
             # A different unit's citations must never support this unit's claims.
             "cited_sources": [_post_source(source, reference_ids) for source in sources_by_question[name]],
         })
+        if index not in grounded_units:
+            # Keep the position and its source in whole-body judgments. Its
+            # coordinate proof is deterministic, not a model probability.
+            continue
         api_identity_policy = CODE_API_IDENTITY_POLICY if (
             unit.basis in {"source", "inference"}
             and unit.source_location is None and block_type != "code"
@@ -654,7 +661,7 @@ def assess_post_semantics(
                 "that the unmodified source already contained it. Reject unauthorized edits and new unsupported external facts."
             ),
         })
-    citation_units = {index: unit_id for index, (unit_id, unit) in enumerate(grounded_units)
+    citation_units = {index: unit_id for index, (unit_id, unit) in grounded_units.items()
                       if len(unit.refs) > 1}
     for index in citation_units:
         sources_by_question[f"citations_{index}"] = sources_by_question[f"grounded_{index}"]
@@ -813,7 +820,7 @@ def assess_post_semantics(
         # No model probability or empty semantic report is needed in that case.
         return
     predicates = _post_predicate_instructions(questions, sources_by_question)
-    source_unit_names = {f"grounded_{index}" for index, (_unit_id, unit) in enumerate(grounded_units)
+    source_unit_names = {f"grounded_{index}" for index, (_unit_id, unit) in grounded_units.items()
                          if unit.basis in {"source", "excerpt", "inference"}}
     source_question_names = source_unit_names | {
         f"citations_{index}" for index in citation_units if f"grounded_{index}" in source_unit_names
@@ -911,7 +918,7 @@ def assess_post_semantics(
     assessment.semantic_refusals = refused_names
     assessment.score_avg = sum(probabilities.values()) / len(probabilities) if probabilities else None
     checks = []
-    for index, (unit_id, _unit) in enumerate(grounded_units):
+    for index, (unit_id, _unit) in grounded_units.items():
         name = f"grounded_{index}"
         refused = name in refused_names
         probability = None if refused else probabilities[name]

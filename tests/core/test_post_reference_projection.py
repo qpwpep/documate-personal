@@ -67,7 +67,7 @@ def _state(*, bound_previous: bool, terminal_partial: bool) -> GraphState:
         }},
     ]}), [first, second, prior_only], retrieval_required=True) if prior_only is not None else None
     requirement_ids = ["first_value", "reference_literal"]
-    body = TransformAnswerBody(
+    body = TransformAnswerBody(change_requirement="if_needed",
         source=BoundAnswerReference(ref="previous", response_hash=previous.content_hash),
         instruction="원문과 위치를 유지하고 first.py 다음 notes.py 순서로 재배치해줘.",
         evidence_ids=["instruction"],
@@ -119,9 +119,9 @@ def test_post_body_aliases_and_requirement_source_ids_preserve_text_and_domain_i
     updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
 
     source_calls = [call for call in boundary.requests if set(json.loads(call["input"])) == {"units"}]
-    assert len(source_calls) == 3
+    assert len(source_calls) == 2
     source_units = []
-    for index, call in enumerate(source_calls):
+    for index, call in zip((0, 2), source_calls):
         unit, = json.loads(call["input"])["units"]
         assert unit["name"] == f"grounded_{index}"
         assert [question["name"] for question in call["questions"]] == [f"grounded_{index}"]
@@ -135,7 +135,7 @@ def test_post_body_aliases_and_requirement_source_ids_preserve_text_and_domain_i
     requirement_call, = [call for call in boundary.requests if "requirements" in json.loads(call["input"])]
     body_input = json.loads(body_call["input"])
     requirement_input = json.loads(requirement_call["input"])
-    assert [unit["refs"] for unit in source_units] == [["e1"], ["e1"], ["e2"]]
+    assert [unit["refs"] for unit in source_units] == [["e1"], ["e2"]]
     assert [unit["refs"] for unit in body_input["units"]] == [["e1"], ["e1"], ["e2"]]
     displayed = AnswerDocument.model_validate(body_input["rendered_response"]["body"])
     assert [unit.refs for _, unit in iter_content_units(displayed)] == [["e1"], ["e1"], ["e2"]]

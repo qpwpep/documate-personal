@@ -437,6 +437,28 @@ export interface components {
             type: "code";
         };
         /**
+         * ConfiguredRecipient
+         * @description An explicit reference to the exact recipient offered by this request's UI.
+         */
+        ConfiguredRecipient: {
+            /**
+             * Evidence Ids
+             * @default []
+             */
+            evidence_ids: string[];
+            /**
+             * Raw Input
+             * @description Exact user phrase selecting the configured recipient, not a new name or ID.
+             */
+            raw_input: string;
+            selector: components["schemas"]["RecipientSelector"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            state: "configured";
+        };
+        /**
          * ContentUnit
          * @description The exact displayed content and its proposed relationship to sources.
          */
@@ -951,7 +973,7 @@ export interface components {
             match: "topic" | "symbol" | "definition";
             /**
              * Symbols
-             * @description At most one primary target. Use a fully qualified API name when selecting calls to that API. To investigate whether an uploaded call belongs to that API, use the observed call's written name instead; do not assume the answer by canonicalizing its owner. Preserve ownership and surrounding binding questions in query and the body, not as additional literal aspects. Use separate tasks for independent symbols, including each uploaded variable/constant whose value is requested. Never put a second independent variable in the first variable's aspects: symbol retrieval selects only the primary target's occurrences. Calls inspected inside a function belong in its aspects, not additional definitions.
+             * @description At most one primary target. Use a fully qualified API name when selecting calls to that API. To investigate whether an uploaded call belongs to that API, use the observed call's written name instead; do not assume the answer by canonicalizing its owner. Preserve ownership and surrounding binding questions in query and the body, not as additional literal aspects. Use separate tasks for independent symbols, including each uploaded variable/constant whose value is requested. Never put a second independent variable in the first variable's aspects: symbol retrieval selects only the primary target's occurrences. A query mentioning related samples, constraints, writes or other objects does not widen those occurrences. Plan a separate target when its name is known, or an explicit topic task without symbols when the related source must be discovered. Calls inspected inside a function belong in its aspects, not additional definitions.
              */
             symbols: string[];
             /**
@@ -1521,7 +1543,7 @@ export interface components {
             /** @default null */
             failure: components["schemas"]["SlackFailure"] | null;
             /** Intent */
-            intent: components["schemas"]["OmittedRecipient"] | components["schemas"]["ExplicitRecipient"] | components["schemas"]["UnresolvedRecipient"];
+            intent: components["schemas"]["OmittedRecipient"] | components["schemas"]["ExplicitRecipient"] | components["schemas"]["ConfiguredRecipient"] | components["schemas"]["UnresolvedRecipient"];
             /**
              * Invocation Id
              * @default null
@@ -1994,7 +2016,7 @@ export interface components {
              * @default not_evaluated
              * @enum {string}
              */
-            support_status: "not_evaluated" | "exact_match" | "unsupported";
+            support_status: "not_evaluated" | "exact_match" | "verified_location" | "unsupported";
             /** Unit Id */
             unit_id: string;
         };

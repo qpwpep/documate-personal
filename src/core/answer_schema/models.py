@@ -157,7 +157,7 @@ class Citation(AnswerModel):
 class UnitCheck(AnswerModel):
     unit_id: str
     reference_status: Literal["resolved", "missing", "not_required"]
-    support_status: Literal["not_evaluated", "exact_match", "unsupported"] = "not_evaluated"
+    support_status: Literal["not_evaluated", "exact_match", "verified_location", "unsupported"] = "not_evaluated"
     issues: list[str] = Field(default_factory=list)
 
 
@@ -218,6 +218,7 @@ def derive_checks_and_citations(
 
     Resolving references does not evaluate a paraphrase's semantic support.
     Only an excerpt equal to one retained source selection gets exact_match.
+    A dedicated, locally resolved source position gets verified_location.
     """
     by_id = {item.id: item for item in evidence}
     from src.core.answer_schema.source_locations import source_location_issues
@@ -242,6 +243,8 @@ def derive_checks_and_citations(
         if path in location_issues:
             support = "unsupported"
             messages.extend(location_issues[path])
+        elif unit.source_location is not None:
+            support = "verified_location"
         checks.append(UnitCheck(unit_id=path, reference_status=status, support_status=support, issues=messages))
         for ref in unit.refs:
             if ref in by_id and ref not in adopted:

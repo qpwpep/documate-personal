@@ -89,7 +89,7 @@ def test_server_generates_physical_range_from_offsets_including_blank_lines(newl
     document = location_document(ref, start=source.index(CODE), end=len(source))
     result = AnswerResponse.from_document(document, [ref], retrieval_required=True)
     assert result.content.blocks[0].content[0].text == "sample.py:30–31"
-    assert result.checks[0].support_status == "not_evaluated"
+    assert result.checks[0].support_status == "verified_location"
     assert not result.checks[0].issues
 
 

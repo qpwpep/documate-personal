@@ -95,7 +95,7 @@ def test_mismatching_excerpt_fails_without_publishing_a_replacement_excerpt():
     snapshot.parsed_hits = [_hit(evidence)]
 
     assessment = assess_validation(snapshot)
-    updates = apply_validation_outcome(snapshot=snapshot, assessment=assessment, attempt=1, needs_retry=False)
+    updates = apply_validation_outcome(snapshot=snapshot, assessment=assessment, attempt=1, needs_retry=False).updates
     outcome = ResponseAssembler().assemble(response=updates)
 
     assert assessment.checked_result.checks[0].support_status == "unsupported"

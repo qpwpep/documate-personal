@@ -790,6 +790,43 @@
         "title": "CodeBlock",
         "type": "object"
       },
+      "ConfiguredRecipient": {
+        "additionalProperties": false,
+        "description": "An explicit reference to the exact recipient offered by this request's UI.",
+        "properties": {
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "raw_input": {
+            "description": "Exact user phrase selecting the configured recipient, not a new name or ID.",
+            "minLength": 1,
+            "title": "Raw Input",
+            "type": "string"
+          },
+          "selector": {
+            "$ref": "#/components/schemas/RecipientSelector"
+          },
+          "state": {
+            "const": "configured",
+            "default": "configured",
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "selector",
+          "raw_input",
+          "evidence_ids"
+        ],
+        "title": "ConfiguredRecipient",
+        "type": "object"
+      },
       "ContentUnit": {
         "additionalProperties": false,
         "description": "The exact displayed content and its proposed relationship to sources.",
@@ -2147,7 +2184,7 @@
             "type": "string"
           },
           "symbols": {
-            "description": "At most one primary target. Use a fully qualified API name when selecting calls to that API. To investigate whether an uploaded call belongs to that API, use the observed call's written name instead; do not assume the answer by canonicalizing its owner. Preserve ownership and surrounding binding questions in query and the body, not as additional literal aspects. Use separate tasks for independent symbols, including each uploaded variable/constant whose value is requested. Never put a second independent variable in the first variable's aspects: symbol retrieval selects only the primary target's occurrences. Calls inspected inside a function belong in its aspects, not additional definitions.",
+            "description": "At most one primary target. Use a fully qualified API name when selecting calls to that API. To investigate whether an uploaded call belongs to that API, use the observed call's written name instead; do not assume the answer by canonicalizing its owner. Preserve ownership and surrounding binding questions in query and the body, not as additional literal aspects. Use separate tasks for independent symbols, including each uploaded variable/constant whose value is requested. Never put a second independent variable in the first variable's aspects: symbol retrieval selects only the primary target's occurrences. A query mentioning related samples, constraints, writes or other objects does not widen those occurrences. Plan a separate target when its name is known, or an explicit topic task without symbols when the related source must be discovered. Calls inspected inside a function belong in its aspects, not additional definitions.",
             "items": {
               "type": "string"
             },
@@ -3428,6 +3465,7 @@
           "intent": {
             "discriminator": {
               "mapping": {
+                "configured": "#/components/schemas/ConfiguredRecipient",
                 "explicit": "#/components/schemas/ExplicitRecipient",
                 "omitted": "#/components/schemas/OmittedRecipient",
                 "unresolved": "#/components/schemas/UnresolvedRecipient"
@@ -3440,6 +3478,9 @@
               },
               {
                 "$ref": "#/components/schemas/ExplicitRecipient"
+              },
+              {
+                "$ref": "#/components/schemas/ConfiguredRecipient"
               },
               {
                 "$ref": "#/components/schemas/UnresolvedRecipient"
@@ -4600,6 +4641,7 @@
             "enum": [
               "not_evaluated",
               "exact_match",
+              "verified_location",
               "unsupported"
             ],
             "title": "Support Status",

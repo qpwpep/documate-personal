@@ -297,5 +297,204 @@
         }
       }
     }
+  },
+  "verifiedLocation": {
+    "content": {
+      "blocks": [
+        {
+          "type": "code",
+          "language": "python",
+          "inline": false,
+          "content": {
+            "text": "value = 1",
+            "basis": "source",
+            "refs": [
+              "ref:2bde1a18c2ba9c904b6e6840630f1fdb2dbf156a4179fa35141b3aa9d324cbca"
+            ],
+            "source_location": null,
+            "sentence_scope": null
+          }
+        },
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "text": "first.py:1",
+              "basis": "source",
+              "refs": [
+                "ref:2bde1a18c2ba9c904b6e6840630f1fdb2dbf156a4179fa35141b3aa9d324cbca"
+              ],
+              "source_location": {
+                "ref": "ref:2bde1a18c2ba9c904b6e6840630f1fdb2dbf156a4179fa35141b3aa9d324cbca",
+                "start": 0,
+                "end": 10
+              },
+              "sentence_scope": null
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "language": "python",
+          "inline": false,
+          "content": {
+            "text": "REFERENCE_LITERAL = \"ref:2bde1a18c2ba9c904b6e6840630f1fdb2dbf156a4179fa35141b3aa9d324cbca\"",
+            "basis": "source",
+            "refs": [
+              "ref:ebf3068bfaa3ddb7ef37046fffe149aed2b5021c06f5cea4a86a12cb172db51d"
+            ],
+            "source_location": null,
+            "sentence_scope": null
+          }
+        }
+      ]
+    },
+    "sources": {
+      "source:9006786cde51f700b30dcc3a2f52aa0b3e4659eb358eb11a5e32805398f3d9a1": {
+        "snapshot": {
+          "snapshot_id": "snapshot:acc852d63afd3e1578c1af9b9b5d131e44d56c4f7cc2831bcf914aff340dfbd7",
+          "document_id": "doc:c7f82e31471020fd06e1fcce3064e71ac6d8e4a08fae575d8f0bafc32838e31b",
+          "content_hash": "sha256:585c93666fcb046b7b264d3fa73202aa2a38254ae82a4b3ba19e873c2d5a9886",
+          "source_uri": "upload:///reference-projection/first.py",
+          "title": "first.py",
+          "media_type": "text/x-python",
+          "source_type": "upload",
+          "parser": "python-ast",
+          "parser_version": "2",
+          "parser_config": {},
+          "capture_scope": "full_document",
+          "quality_issues": []
+        },
+        "element": {
+          "element_id": "python-source",
+          "kind": "code",
+          "text": "value = 1\n",
+          "parent_id": null,
+          "order": 0,
+          "heading_level": null,
+          "heading_path": [],
+          "language": "python",
+          "table": null,
+          "anchors": [
+            {
+              "kind": "code",
+              "start": 0,
+              "end": 10,
+              "line_start": 1,
+              "line_end": 1,
+              "cell_id": null,
+              "cell_index": null,
+              "page_no": null,
+              "bbox": null,
+              "coordinate_space": "normalized",
+              "coordinate_origin": "top_left",
+              "page_width": null,
+              "page_height": null,
+              "precision": "exact"
+            }
+          ],
+          "metadata": {
+            "code_metadata": {},
+            "file_id": "first.py"
+          }
+        }
+      },
+      "source:41b157a19ae52974cb5a9d4cbb6674c3c0b883b1186c46206166f9c6b12167ae": {
+        "snapshot": {
+          "snapshot_id": "snapshot:2f0f82c3f3f6dae4b4cd76422894480c5025d1b8956510f625d0ae8d818d6318",
+          "document_id": "doc:677c396bd9b2292b8e538161a2251eb985add0e48b8b96d8447b8c91757ee729",
+          "content_hash": "sha256:7e2907bddcfa2f4641bf7ccddf69e3c61e527296b8f01909347ccf9af9c379cb",
+          "source_uri": "upload:///reference-projection/notes.py",
+          "title": "notes.py",
+          "media_type": "text/x-python",
+          "source_type": "upload",
+          "parser": "python-ast",
+          "parser_version": "2",
+          "parser_config": {},
+          "capture_scope": "full_document",
+          "quality_issues": []
+        },
+        "element": {
+          "element_id": "python-source",
+          "kind": "code",
+          "text": "REFERENCE_LITERAL = \"ref:2bde1a18c2ba9c904b6e6840630f1fdb2dbf156a4179fa35141b3aa9d324cbca\"\n# Retained source context.\n",
+          "parent_id": null,
+          "order": 0,
+          "heading_level": null,
+          "heading_path": [],
+          "language": "python",
+          "table": null,
+          "anchors": [
+            {
+              "kind": "code",
+              "start": 0,
+              "end": 118,
+              "line_start": 1,
+              "line_end": 2,
+              "cell_id": null,
+              "cell_index": null,
+              "page_no": null,
+              "bbox": null,
+              "coordinate_space": "normalized",
+              "coordinate_origin": "top_left",
+              "page_width": null,
+              "page_height": null,
+              "precision": "exact"
+            }
+          ],
+          "metadata": {
+            "code_metadata": {},
+            "file_id": "notes.py"
+          }
+        }
+      }
+    },
+    "citations": [
+      {
+        "number": 1,
+        "evidence_id": "ref:2bde1a18c2ba9c904b6e6840630f1fdb2dbf156a4179fa35141b3aa9d324cbca",
+        "source_id": "source:9006786cde51f700b30dcc3a2f52aa0b3e4659eb358eb11a5e32805398f3d9a1",
+        "selection": {
+          "start": 0,
+          "end": 10,
+          "cell_ids": []
+        }
+      },
+      {
+        "number": 2,
+        "evidence_id": "ref:ebf3068bfaa3ddb7ef37046fffe149aed2b5021c06f5cea4a86a12cb172db51d",
+        "source_id": "source:41b157a19ae52974cb5a9d4cbb6674c3c0b883b1186c46206166f9c6b12167ae",
+        "selection": {
+          "start": 0,
+          "end": 91,
+          "cell_ids": []
+        }
+      }
+    ],
+    "checks": [
+      {
+        "unit_id": "b0.content",
+        "reference_status": "resolved",
+        "support_status": "not_evaluated",
+        "issues": []
+      },
+      {
+        "unit_id": "b1.content.0",
+        "reference_status": "resolved",
+        "support_status": "verified_location",
+        "issues": []
+      },
+      {
+        "unit_id": "b2.content",
+        "reference_status": "resolved",
+        "support_status": "not_evaluated",
+        "issues": []
+      }
+    ],
+    "issues": [],
+    "actions": [],
+    "content_hash": "2ac0009d3532f3c4a8acd0a75b6cdfa11adba1249c91ab4c1c0bfe9674e3f31e",
+    "retrieval_required": true,
+    "semantic_validation": null
   }
 }

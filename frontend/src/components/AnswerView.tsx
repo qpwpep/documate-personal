@@ -311,7 +311,9 @@ function ValidationSummary({ response, units, limits, incomplete, executionId }:
           check={check} threshold={report.threshold} />)}
         {units.map(({ path, unit }, index) => <section key={path} aria-label={`내용 ${index + 1} 검증`}>
           <p><strong>내용 {index + 1}</strong> · {unit.text}</p>
-          <SemanticResult label="근거 지지" check={report?.checks.find((check) => check.name === 'grounded' && check.unit_id === path)} threshold={report?.threshold} />
+          {response.checks.find((check) => check.unit_id === path)?.support_status === 'verified_location'
+            ? <p>원문 위치: 확인됨 · 보관된 원문의 줄 위치와 일치합니다.</p>
+            : <SemanticResult label="근거 지지" check={report?.checks.find((check) => check.name === 'grounded' && check.unit_id === path)} threshold={report?.threshold} />}
         </section>)}
       </details>
   </details>;

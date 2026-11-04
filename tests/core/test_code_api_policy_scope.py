@@ -52,7 +52,6 @@ def _state(case: str) -> GraphState:
 
 
 @pytest.mark.parametrize("case,question_name,expected_policy", [
-    ("source_location", "grounded_1", False),
     ("source_code_quote", "grounded_0", False),
     ("altered_code_quote", "grounded_0", False),
     ("excerpt", "grounded_0", False),
@@ -73,10 +72,7 @@ def test_post_api_identity_policy_respects_the_typed_content_role(
     payload = json.loads(call["input"])
     unit, = [unit for unit in payload["units"] if unit["name"] == question_name]
 
-    if case == "source_location":
-        assert unit["source_location"] == {"ref": "e1", "start": 59, "end": 89}
-        assert unit["text"] == "branch.py:6"
-    elif case in {"source_code_quote", "altered_code_quote", "excerpt"}:
+    if case in {"source_code_quote", "altered_code_quote", "excerpt"}:
         assert unit["block_type"] == ("paragraph" if case == "excerpt" else "code")
         assert unit["basis"] == ("excerpt" if case == "excerpt" else "source")
         assert "support every material claim" in question["instructions"]
@@ -94,6 +90,30 @@ def test_post_api_identity_policy_respects_the_typed_content_role(
         assert unit["cited_sources"][0]["kind"] == "code"
         assert unit["text"] == test_inference_api_identity_live.CLAIMS["actual_bad"]
     assert (CODE_API_IDENTITY_POLICY in question["instructions"]) is expected_policy
+
+
+def test_verified_source_location_keeps_body_context_without_an_api_identity_judgment() -> None:
+    state = _state("source_location")
+    boundary = DecisionsBoundary()
+
+    updates = make_post_synthesis_validation_node(False, decisions_client=boundary, pass_threshold=0.8)(state)
+
+    names = {question["name"] for call in boundary.requests for question in call["questions"]}
+    assert "grounded_1" not in names
+    assert {"grounded_0", "request_fulfilled", "requirement_0_target_identified",
+            "requirement_0_target_analysis_supported"} <= names
+    call, = [call for call in boundary.requests
+             if any(question["name"] == "request_fulfilled" for question in call["questions"])]
+    body = json.loads(call["input"])
+    unit, = [unit for unit in body["units"] if unit["source_location"] is not None]
+    assert unit["source_location"] == {"ref": "e1", "start": 59, "end": 89}
+    assert unit["text"] == "branch.py:6"
+    assert unit["cited_sources"][0]["id"] == "e1"
+    assert unit["cited_sources"][0]["kind"] == "code"
+    check, = [check for check in updates["response"].result.checks if check.unit_id == unit["unit_id"]]
+    assert check.support_status == "verified_location"
+    assert not any(check.unit_id == unit["unit_id"] and check.name == "grounded"
+                   for check in updates["response"].result.semantic_validation.checks)
 
 
 def test_code_quote_still_requires_its_source_to_support_the_displayed_text() -> None:

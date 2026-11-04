@@ -203,3 +203,65 @@ def test_citation_scope_keeps_actual_source_kind_and_independently_blocks_truthf
     assert source["kind"] == "paragraph"
     assert source["route"] == "docs"
     assert updates["retry"].needs_retry
+
+
+def test_verified_source_location_uses_local_proof_and_keeps_full_request_context():
+    state = test_post_reference_projection._state(bound_previous=False, terminal_partial=False)
+    boundary = DecisionsBoundary({"grounded_1": 0.1})
+
+    updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
+
+    assert updates["response"].kind == "answer"
+    questions = {question["name"] for call in boundary.requests for question in call["questions"]}
+    assert "grounded_1" not in questions
+    assert {"grounded_0", "grounded_2", "request_fulfilled", "requirement_0_target_identified",
+            "requirement_0_target_analysis_supported"} <= questions
+    body, = [json.loads(call["input"]) for call in boundary.requests
+             if any(question["name"] == "request_fulfilled" for question in call["questions"])]
+    location = body["units"][1]
+    assert location["text"] == "first.py:1"
+    assert location["source_location"] == {"ref": "e1", "start": 0, "end": 10}
+    assert location["cited_sources"][0]["source_lines"][0]["line_number"] == 1
+    report = updates["response"].result.semantic_validation
+    assert not any(check.name == "grounded" and check.unit_id == "b1.content.0" for check in report.checks)
+
+
+def test_source_location_records_deterministic_proof_without_an_excerpt_match_or_model_score():
+    state = test_post_reference_projection._state(bound_previous=False, terminal_partial=False)
+    result = state["response"].result
+
+    assert result.checks[1].support_status == "verified_location"
+    assert result.checks[0].support_status == "not_evaluated"
+    assert result.semantic_validation is None
+
+
+@pytest.mark.parametrize("invalid", ["outside_selection", "mixed_prose"])
+def test_invalid_source_location_remains_a_local_failure_even_if_model_approves(invalid):
+    state = test_post_reference_projection._state(bound_previous=False, terminal_partial=False)
+    response = state["response"]
+    document = response.result.content.model_copy(deep=True)
+    unit = document.blocks[1].content[0]
+    if invalid == "outside_selection":
+        unit.source_location = unit.source_location.model_copy(update={"end": 11})
+    else:
+        unit.text = "first.py:1, and the value is 999."
+    state["response"] = response.model_copy(update={
+        "result": finalize_answer(document, response.evidence_packet, retrieval_required=True),
+    })
+
+    updates = make_post_synthesis_validation_node(False, decisions_client=DecisionsBoundary())(state)
+
+    assert updates["retry"].needs_retry
+    check, = [check for check in state["response"].result.checks if check.unit_id == "b1.content.0"]
+    assert check.support_status == "unsupported"
+    assert check.issues == ["source_location_mismatch"]
+
+
+def test_verified_source_location_does_not_discharge_whole_request_fulfillment():
+    state = test_post_reference_projection._state(bound_previous=False, terminal_partial=False)
+    boundary = DecisionsBoundary({"request_fulfilled": 0.1})
+
+    updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
+
+    assert updates["retry"].needs_retry
+    assert updates["retry"].retry_reason == "missing_content"
