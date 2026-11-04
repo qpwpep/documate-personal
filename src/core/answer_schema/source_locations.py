@@ -9,6 +9,9 @@ if TYPE_CHECKING:
     from src.core.answer_schema.models import AnswerDocument, SourceLocationReference
 
 
+SOURCE_LOCATION_PLACEHOLDER = "<source_location>"
+
+
 def source_location_text(
     location: SourceLocationReference, evidence: EvidenceRef | None,
 ) -> tuple[str | None, str | None]:

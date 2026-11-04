@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from src.core.answer_export import answer_export_snapshot
 from src.core.answer_schema import AnswerDocument, AnswerResponse, document_hash, export_answer_text
+from src.core.answer_schema.source_locations import SOURCE_LOCATION_PLACEHOLDER
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
 from src.core.evidence import build_evidence
@@ -32,7 +33,7 @@ def evidence(text=None, *, start=0, end=None, exact=True, title="sample.py", not
     ), start=start, end=end)
 
 
-def location_document(ref, *, start=None, end=None, text="model supplied location text"):
+def location_document(ref, *, start=None, end=None, text=SOURCE_LOCATION_PLACEHOLDER):
     return AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [{
         "text": text, "basis": "source", "refs": [ref.id],
         "source_location": {"ref": ref.id,
@@ -50,9 +51,22 @@ def test_bound_location_uses_source_identity_instead_of_parsing_names(title):
 
     assert all(not check.issues for check in result.checks)
     assert result.content.blocks[0].content[0].text == f"{title}:1"
-    assert document.blocks[0].content[0].text == "model supplied location text"
+    assert document.blocks[0].content[0].text == SOURCE_LOCATION_PLACEHOLDER
+    assert SOURCE_LOCATION_PLACEHOLDER not in export_answer_text(result, include_sources=True)
     assert answer_export_snapshot(result) == result
     assert result.content.blocks[0].content[0].text in export_answer_text(result, include_sources=True)
+
+
+@pytest.mark.parametrize("text", [CODE, "This source call is conditional."])
+def test_location_binding_does_not_discard_generated_content(text):
+    ref = evidence()
+    document = location_document(ref, start=29, end=29 + len(CODE), text=text)
+
+    result = AnswerResponse.from_document(document, [ref], retrieval_required=True)
+
+    assert result.content.blocks[0].content[0].text == text
+    assert result.checks[0].support_status == "unsupported"
+    assert result.checks[0].issues == ["source_location_mismatch"]
 
 
 @pytest.mark.parametrize("subject", ["DataFrame", "데이터셋", "표", "관측 자료"])
@@ -116,7 +130,7 @@ def test_unknown_provenance_cannot_generate_a_line_number():
     result = AnswerResponse.from_document(location_document(ref), [ref])
     assert result.checks[0].support_status == "unsupported"
     assert result.checks[0].issues == ["source_location_unverifiable"]
-    assert result.content.blocks[0].content[0].text == "model supplied location text"
+    assert result.content.blocks[0].content[0].text == SOURCE_LOCATION_PLACEHOLDER
 
 
 def test_unknown_evidence_cannot_generate_a_line_number():

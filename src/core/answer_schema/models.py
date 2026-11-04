@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 from src.core.evidence import EvidenceRef
+from src.core.answer_schema.source_locations import SOURCE_LOCATION_PLACEHOLDER
 from src.core.save_contract import SaveArtifact, SaveOperation
 from src.core.slack_contract import SlackDelivery
 
@@ -35,7 +36,11 @@ class ContentUnit(AnswerModel):
     text: str = Field(min_length=1)
     basis: Literal["source", "inference", "example", "interaction", "excerpt"] = "interaction"
     refs: list[str] = Field(default_factory=list)
-    source_location: SourceLocationReference | None = None
+    source_location: SourceLocationReference | None = Field(default=None, description=(
+        "Location-only content. When generating this unit, set text exactly to "
+        f"{SOURCE_LOCATION_PLACEHOLDER!r}; put source quotations and explanations in separate units with source_location=null. "
+        "The server replaces only that placeholder with the verified location. Stored responses retain the rendered text."
+    ))
     sentence_scope: int | None = Field(default=None, ge=1, strict=True,
         description="One-based index of the scoped sentence-count condition this prose belongs to. Use null when the confirmed contract has no scoped sentence counts. A sentence cannot fill multiple scopes.")
 
@@ -339,8 +344,11 @@ class AnswerResponse(AnswerModel):
         from src.core.answer_schema.source_locations import source_location_text
 
         document = document.model_copy(deep=True)
+        # Only the explicit generation slot may be replaced. Mixed content stays
+        # intact for mismatch detection and repair. Already rendered locations
+        # pass that check again without changing their content revision.
         for _path, unit in iter_content_units(document):
-            if unit.source_location is not None:
+            if unit.source_location is not None and unit.text == SOURCE_LOCATION_PLACEHOLDER:
                 text, _issue = source_location_text(unit.source_location, by_id.get(unit.source_location.ref))
                 if text is not None:
                     unit.text = text

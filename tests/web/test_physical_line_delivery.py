@@ -13,7 +13,9 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from openai import OpenAI
 
 from src.app.web.app import create_app
-from src.core.answer_schema import AnswerDocument, AnswerResponse, export_answer_text
+from src.core.answer_schema import AnswerDocument, export_answer_text
+from src.core.answer_schema.wire import SourcedAnswerPayload
+from src.core.contracts.outcome import AnswerExportResult
 from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import WireRequestContract
 from src.infra.settings import APP_ENV_SPEC_BY_NAME, AppSettings
@@ -64,7 +66,7 @@ def physical_line_api(tmp_path, monkeypatch):
         return connect(sock, address)
 
     monkeypatch.setattr(socket.socket, "connect", local_only)
-    controls = SimpleNamespace(invalid_location=True, paragraph_code=False,
+    controls = SimpleNamespace(invalid_location=True, paragraph_code=False, merged_location=None, save_requested=False,
                                inline_mode=None, invalid_second_location=False, format_probability=0.99, format_refused=False,
                                requests=[], synthesis_packets=[], decisions_inputs=[])
 
@@ -109,12 +111,17 @@ def physical_line_api(tmp_path, monkeypatch):
                 answer["format"] = [{"kind": "inline_code", "mode": "required", "evidence_ids": ["format"]}]
                 evidence.append({"id": "format", "turn_id": context_record["user_turn_ledger"][-1]["turn_id"],
                                  "quote": question, "scope": "answer.format", "interpretation": "instruction"})
+            actions = {}
+            if controls.save_requested:
+                actions["save_text"] = {"intent": "requested", "evidence_ids": ["save"]}
+                evidence.append({"id": "save", "turn_id": context_record["user_turn_ledger"][-1]["turn_id"],
+                                 "quote": question, "scope": "actions.save_text", "interpretation": "instruction"})
             plan = {
                 "use_retrieval": True,
                 "tasks": [{"route": "upload", "query": question if controls.inline_mode is not None else "region amount groupby sum", "k": 4,
                            "requirement": {"file_ids": [item["file_id"] for item in context_record["upload_files"]]}}],
                 "request_contract": WireRequestContract(
-                    body={"kind": "compose", "instruction": question}, answer=answer, evidence=evidence,
+                    body={"kind": "compose", "instruction": question}, answer=answer, evidence=evidence, actions=actions,
                     slack_recipient={"state": "omitted"},
                 ).model_dump(mode="json"),
             }
@@ -135,10 +142,10 @@ def physical_line_api(tmp_path, monkeypatch):
                 second_start = (source["selection"]["end"] if controls.invalid_second_location
                                 else source["selection"]["start"] + source["excerpt"].index("y = 2"))
                 document = {"blocks": [{"type": "paragraph", "content": [
-                    {"text": "first source position", "basis": "source", "refs": [source["id"]],
+                    {"text": "<source_location>", "basis": "source", "refs": [source["id"]],
                      "source_location": {"ref": source["id"], "start": first_start, "end": first_start + 5}},
                     {"text": f"원문은 {first}이고", "basis": "source", "refs": [source["id"]]},
-                    {"text": "second source position", "basis": "source", "refs": [source["id"]],
+                    {"text": "<source_location>", "basis": "source", "refs": [source["id"]],
                      "source_location": {"ref": source["id"], "start": second_start, "end": second_start + 5}},
                     {"text": f"원문은 {second}입니다.", "basis": "source", "refs": [source["id"]]},
                 ]}]}
@@ -146,7 +153,7 @@ def physical_line_api(tmp_path, monkeypatch):
             evidence = next(item for item in packet if CALCULATION in item["excerpt"])
             start = (evidence["selection"]["end"] if controls.invalid_location
                      else evidence["selection"]["start"] + evidence["excerpt"].index(CALCULATION))
-            location = {"text": "source position", "basis": "source", "refs": [evidence["id"]],
+            location = {"text": "<source_location>", "basis": "source", "refs": [evidence["id"]],
                         "source_location": {"ref": evidence["id"], "start": start, "end": start + len(CALCULATION)}}
             document = {"blocks": [
                 {"type": "code", "language": "python", "inline": False, "content": {
@@ -159,6 +166,11 @@ def physical_line_api(tmp_path, monkeypatch):
                     "text": f'`{CALCULATION}` —',
                     "basis": "source", "refs": [evidence["id"]],
                 }, location]}]}
+            if controls.merged_location == "always" or (
+                controls.merged_location == "repair" and len(controls.synthesis_packets) == 1
+            ):
+                document = {"blocks": [{"type": "code", "language": "python", "inline": False,
+                                       "content": {**location, "text": CALCULATION}}]}
         else:
             raise AssertionError(f"Unexpected provider schema: {schema_name}")
         return httpx.Response(200, json=_chat_response(payload, document))
@@ -190,7 +202,7 @@ def test_out_of_evidence_location_cannot_be_delivered_as_completed(physical_line
     assert api.controls.decisions_inputs, "The actual Decisions HTTP boundary was not exercised"
     assert result["status"] == "partial", result
     assert result["problem"]["code"] == "model_output_invalid"
-    response = AnswerResponse.model_validate(result["response"])
+    response = SourcedAnswerPayload.model_validate(result["response"]).to_answer()
     assert "29행" not in export_answer_text(response)
     assert CALCULATION in export_answer_text(response)
     limitation = next(issue for issue in response.issues if issue.code == "source_location_unverified")
@@ -232,12 +244,12 @@ def test_physical_line_is_shared_by_model_validation_answer_and_download(physica
         record = next(item for item in source["source_lines"] if item["line_number"] == 30)
         start = source["selection"]["start"]
         assert source["excerpt"][record["start"] - start:record["end"] - start] == expected_line
-        if "evaluation_policy" in payload:
+        if "sources" in payload and "tasks" in payload:
             assert "text" not in record
         else:
             assert record["text"] == expected_line
 
-    original = AnswerResponse.model_validate(result["response"])
+    original = SourcedAnswerPayload.model_validate(result["response"]).to_answer()
     displayed = export_answer_text(original)
     assert CALCULATION in displayed
     assert "sample_data_analysis.py:30" in displayed
@@ -248,13 +260,15 @@ def test_physical_line_is_shared_by_model_validation_answer_and_download(physica
     assert saved.status_code == 200, saved.text
     saved_result = saved.json()
     assert saved_result["status"] == "completed", saved_result
-    saved_answer = AnswerResponse.model_validate(saved_result["response"])
-    assert saved_answer.model_copy(update={"actions": []}) == original
-    receipt = saved_answer.actions[-1]
+    export = AnswerExportResult.model_validate(saved_result)
+    assert export.answer_id == result["answer_id"]
+    assert "response" not in saved_result
+    receipt = export.receipt
     download = api.client.get(f"/download/{receipt.artifact.filename}")
     assert download.status_code == 200, download.text
     assert CALCULATION in download.content.decode("utf-8-sig")
     assert "sample_data_analysis.py:30" in download.content.decode("utf-8-sig")
+    assert download.content == export_answer_text(original, include_sources=True).encode("utf-8-sig")
 
 
 def test_exact_source_line_in_paragraph_completes_and_downloads(physical_line_api):
@@ -266,7 +280,7 @@ def test_exact_source_line_in_paragraph_completes_and_downloads(physical_line_ap
     result = final_response(api, query=QUESTION, uploads=context(current))
 
     assert result["status"] == "completed", result
-    response = AnswerResponse.model_validate(result["response"])
+    response = SourcedAnswerPayload.model_validate(result["response"]).to_answer()
     assert response.content.blocks[0].type == "paragraph"
     assert not response.issues
     displayed = export_answer_text(response)
@@ -275,10 +289,76 @@ def test_exact_source_line_in_paragraph_completes_and_downloads(physical_line_ap
     saved = api.client.post(f"/sessions/session-a/answers/{result['answer_id']}/save")
     assert saved.status_code == 200, saved.text
     assert saved.json()["status"] == "completed", saved.json()
-    saved_answer = AnswerResponse.model_validate(saved.json()["response"])
-    artifact = saved_answer.actions[-1].artifact
+    artifact = AnswerExportResult.model_validate(saved.json()).receipt.artifact
     download = api.client.get(f"/download/{artifact.filename}")
     assert download.status_code == 200
+    assert download.content == export_answer_text(response, include_sources=True).encode("utf-8-sig")
+
+
+def test_merged_code_and_location_is_repaired_before_completion_and_saved_without_loss(physical_line_api):
+    api = physical_line_api
+    api.controls.invalid_location = False
+    api.controls.merged_location = "repair"
+    current = sync(api, add=[staged(api, SAMPLE.name, SAMPLE.read_bytes())])
+
+    result = final_response(api, query=QUESTION, uploads=context(current))
+
+    synthesis_requests = [payload for path, payload in api.controls.requests
+                          if payload.get("response_format", {}).get("json_schema", {}).get("name") == "AnswerDocument"]
+    assert len(synthesis_requests) == 2, "A code-bearing location must be repaired even with positive Decisions judgments"
+    failed_message = next(message["content"] for message in synthesis_requests[1]["messages"]
+                          if str(message["content"]).startswith("[Failed Draft]"))
+    failed_draft = json.loads(failed_message.split("\n", 2)[2])
+    failed_unit = failed_draft["content"]["blocks"][0]["content"]
+    assert failed_unit["text"] == CALCULATION
+    assert failed_unit["source_location"] is not None
+    assert any("source_location_mismatch" in str(message["content"])
+               for message in synthesis_requests[1]["messages"])
+    assert result["status"] == "completed", result
+    response = SourcedAnswerPayload.model_validate(result["response"]).to_answer()
+    assert not response.issues
+    displayed = export_answer_text(response)
+    assert CALCULATION in displayed
+    assert "sample_data_analysis.py:30" in displayed
+    assert "<source_location>" not in displayed
+
+    saved = api.client.post(f"/sessions/session-a/answers/{result['answer_id']}/save")
+
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["status"] == "completed", saved.json()
+    artifact = AnswerExportResult.model_validate(saved.json()).receipt.artifact
+    download = api.client.get(f"/download/{artifact.filename}")
+    assert download.status_code == 200, download.text
+    assert CALCULATION in download.content.decode("utf-8-sig")
+    assert "sample_data_analysis.py:30" in download.content.decode("utf-8-sig")
+    assert b"<source_location>" not in download.content
+    assert download.content == export_answer_text(response, include_sources=True).encode("utf-8-sig")
+
+
+def test_repeated_merged_code_and_location_cannot_complete_with_high_model_scores(physical_line_api):
+    api = physical_line_api
+    api.controls.invalid_location = False
+    api.controls.merged_location = "always"
+    api.controls.save_requested = True
+    current = sync(api, add=[staged(api, SAMPLE.name, SAMPLE.read_bytes())])
+
+    result = final_response(api, query=QUESTION + " 답변을 TXT 파일로도 저장해줘.", uploads=context(current))
+
+    assert result["status"] in {"partial", "failed"}, result
+    assert result["problem"]["code"] == "model_output_invalid"
+    synthesis_requests = [payload for path, payload in api.controls.requests
+                          if payload.get("response_format", {}).get("json_schema", {}).get("name") == "AnswerDocument"]
+    assert len(synthesis_requests) >= 2
+    for payload in synthesis_requests[1:]:
+        failed_message = next(message["content"] for message in payload["messages"]
+                              if str(message["content"]).startswith("[Failed Draft]"))
+        failed_draft = json.loads(failed_message.split("\n", 2)[2])
+        assert failed_draft["content"]["blocks"][0]["content"]["text"] == CALCULATION
+    if result["response"] is not None:
+        response = SourcedAnswerPayload.model_validate(result["response"]).to_answer()
+        assert response.actions == []
+        assert "<source_location>" not in export_answer_text(response)
+    assert not list((api.root / "output" / "save_text").glob("*.txt"))
 
 
 def test_missing_required_inline_code_cannot_complete_with_high_model_scores(physical_line_api):
@@ -303,7 +383,7 @@ def test_required_inline_code_with_correct_lines_completes_and_preserves_saved_b
     result = final_response(api, query=INLINE_QUESTION, uploads=context(current))
 
     assert result["status"] == "completed", result
-    response = AnswerResponse.model_validate(result["response"])
+    response = SourcedAnswerPayload.model_validate(result["response"]).to_answer()
     paragraph, = response.content.blocks
     assert paragraph.type == "paragraph"
     assert " ".join(unit.text for unit in paragraph.content) == "two_lines.py:1 원문은 `x = 1`이고 two_lines.py:2 원문은 `y = 2`입니다."
@@ -312,12 +392,12 @@ def test_required_inline_code_with_correct_lines_completes_and_preserves_saved_b
     saved = api.client.post(f"/sessions/session-a/answers/{result['answer_id']}/save")
     assert saved.status_code == 200, saved.text
     assert saved.json()["status"] == "completed", saved.json()
-    saved_answer = AnswerResponse.model_validate(saved.json()["response"])
-    assert saved_answer.model_copy(update={"actions": []}) == response
-    receipt = saved_answer.actions[-1]
+    export = AnswerExportResult.model_validate(saved.json())
+    assert export.answer_id == result["answer_id"]
+    receipt = export.receipt
     download = api.client.get(f"/download/{receipt.artifact.filename}")
     assert download.status_code == 200, download.text
-    assert download.content == Path(receipt.file_path).read_bytes()
+    assert download.content == export_answer_text(response, include_sources=True).encode("utf-8-sig")
     assert b"`x = 1`" in download.content and b"`y = 2`" in download.content
 
 
@@ -332,11 +412,11 @@ def test_inline_code_does_not_override_an_invalid_source_location(physical_line_
     assert api.controls.synthesis_packets
     assert result["status"] == "partial", result
     assert result["problem"]["code"] == "model_output_invalid"
-    response = AnswerResponse.model_validate(result["response"])
+    response = SourcedAnswerPayload.model_validate(result["response"]).to_answer()
     displayed = export_answer_text(response)
     assert "two_lines.py:1" in displayed
     assert "`x = 1`" in displayed and "`y = 2`" in displayed
-    assert "second source position" not in displayed
+    assert "<source_location>" not in displayed
     assert any(issue.code == "source_location_unverified" for issue in response.issues)
 
 
