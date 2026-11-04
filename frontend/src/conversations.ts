@@ -15,7 +15,7 @@ export interface ChatTurn {
   result: AgentResponse | null;
   notices: string[];
   error: string | null;
-  requestId: string | null;
+  executionId: string | null;
   interrupted: boolean;
   receiving: boolean;
   exportResult: AnswerExportResult | null;
@@ -101,11 +101,11 @@ const validateSnapshot = new Ajv2020().compile<StoredSnapshot>({
             type: 'array',
             items: {
               type: 'object', additionalProperties: false,
-              required: ['id', 'query', 'result', 'notices', 'error', 'requestId', 'interrupted', 'receiving', 'exportResult', 'exportError'],
+              required: ['id', 'query', 'result', 'notices', 'error', 'executionId', 'interrupted', 'receiving', 'exportResult', 'exportError'],
               properties: {
                 id: identity, query: text, result: nullableObject,
                 notices: { type: 'array', items: text }, error: nullableText,
-                requestId: nullableText, interrupted: { type: 'boolean' }, receiving: { type: 'boolean' },
+                executionId: nullableText, interrupted: { type: 'boolean' }, receiving: { type: 'boolean' },
                 exportResult: nullableObject, exportError: nullableText,
               },
             },

@@ -1,6 +1,6 @@
 import type { components } from '../api/generated';
 
-export type SourceEvidence = Pick<components['schemas']['EvidenceRef'], 'element' | 'selection'>;
+export type SourceEvidence = Pick<components['schemas']['CapturedAnswerSource'], 'element'> & Pick<components['schemas']['SourceCitation'], 'selection'>;
 export type SourceAnchor = components['schemas']['SourceAnchor'];
 export type SourceLine = {
   line_number: number;

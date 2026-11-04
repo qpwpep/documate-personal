@@ -219,7 +219,7 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
       if (!await ensureSession(id, controller.signal) || controller.signal.aborted) return;
       setProgress((value) => ({ ...value, [id]: '질문을 보내고 있습니다.' }));
       turnId = createId();
-      const turn: ChatTurn = { id: turnId, query, result: null, notices: [], error: null, requestId: null,
+      const turn: ChatTurn = { id: turnId, query, result: null, notices: [], error: null, executionId: null,
         interrupted: false, receiving: true, exportResult: null, exportError: null };
       updateConversation(id, (item) => ({ ...item, draft: consumeDraft && item.draft === query ? '' : item.draft,
         attachments: item.attachments.pendingPrompt === query ? { ...item.attachments, pendingPrompt: null, phase: 'idle' } : item.attachments,
@@ -228,7 +228,7 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
       for await (const incoming of getClient(id).stream(query, { signal: controller.signal, slackRecipient: recipient })) {
         if (!mounted.current || requests.current.get(id) !== controller || controller.signal.aborted) break;
         if (incoming.event === 'request_started') {
-          updateConversation(id, (item) => ({ ...item, turns: item.turns.map((saved) => saved.id === turnId ? { ...saved, requestId: incoming.data.request_id } : saved) }));
+          updateConversation(id, (item) => ({ ...item, turns: item.turns.map((saved) => saved.id === turnId ? { ...saved, executionId: incoming.data.execution_id } : saved) }));
         } else if (incoming.event === 'progress_snapshot') {
           setProgress((value) => ({ ...value, [id]: incoming.data.summary }));
         } else if (incoming.event === 'stage_started') {
@@ -239,7 +239,7 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
         } else if (incoming.event === 'final_response') {
           acceptManifest(id, incoming.data.upload_manifest);
           updateConversation(id, (item) => ({ ...item, turns: item.turns.map((saved) => saved.id === turnId
-            ? { ...saved, result: incoming.data, receiving: false, requestId: incoming.data.request_id || saved.requestId } : saved) }));
+            ? { ...saved, result: incoming.data, receiving: false, executionId: incoming.data.execution_id || saved.executionId } : saved) }));
         }
       }
     } catch (error: unknown) {
@@ -249,7 +249,7 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
         : error instanceof ApiError ? error.message : '응답을 받지 못했습니다. 처리 결과를 확인한 뒤 질문을 수정해 주세요.';
       updateConversation(id, (item) => ({ ...item, connection: 'unknown', connectionError: '다음 질문을 보내기 전에 연결을 다시 확인해 주세요.',
         turns: item.turns.map((saved) => saved.id === turnId ? { ...saved, receiving: false, interrupted: true, error: message,
-          requestId: error instanceof ApiError ? error.requestId ?? saved.requestId : saved.requestId } : saved) }));
+          executionId: error instanceof ApiError ? error.executionId ?? saved.executionId : saved.executionId } : saved) }));
     } finally {
       if (requests.current.get(id) === controller) {
         requests.current.delete(id);
@@ -354,7 +354,7 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
                   {result && <span className={`result-status result-${result.status}${result.status === 'completed' ? ' visually-hidden' : ''}`}>{resultLabels[result.status]}</span>}
                 </div>
                 {result && <>
-                  {result.response ? <AnswerView response={result.response} turn={result} requestId={turn.requestId}
+                  {result.response ? <AnswerView response={result.response} turn={result} executionId={turn.executionId}
                     actions={result.answer_id && <AnswerDelivery key={result.answer_id} client={client}
                     answerId={result.answer_id} response={result.response} currentExport={turn.exportResult}
                     disabled={!ready || conversation.busy !== null} onBeforeSave={async () => await ensureSession(conversation.id) !== null}
@@ -372,7 +372,7 @@ export function App({ apiBaseUrl = '' }: { apiBaseUrl?: string }) {
                 {turn.receiving && <div className="response-progress" role="status" aria-live="polite" aria-atomic="true">
                   <p className="pending-label"><span className="pending-dot" aria-hidden="true" />{progress[conversation.id] || '답변을 준비하고 있습니다.'}</p>
                 </div>}
-                {turn.requestId && !result?.response && <details className="request-details"><summary>요청 정보</summary><p className="request-id">요청 ID: {turn.requestId}</p></details>}
+                {turn.executionId && !result?.response && <details className="request-details"><summary>요청 정보</summary><p className="request-id">요청 ID: {turn.executionId}</p></details>}
                 {recovery && <div className="recovery-actions">
                   {canRetry(turn) && <button type="button" className="secondary-button" disabled={!ready || conversation.busy !== null}
                     onClick={() => void sendQuestion(conversation.id, turn.query)}>같은 질문 다시 보내기</button>}
@@ -455,7 +455,7 @@ function displayedResult(turn: ChatTurn): AgentResponse | null {
   return { ...result, ...(saveRecovered ? { status: 'completed' as const, problem: null, message: '' } : {}),
     response: { ...result.response, actions: [
       ...result.response.actions.filter((action) => action.kind !== 'save_text'),
-      ...turn.exportResult.response.actions.filter((action) => action.kind === 'save_text'),
+      turn.exportResult.receipt,
     ] } };
 }
 function canRecover(turn: ChatTurn): boolean {

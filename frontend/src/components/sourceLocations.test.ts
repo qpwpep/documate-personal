@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { components } from '../api/generated';
 import { formatAnchor, selectedSourceAnchors, sourceExcerpt, sourceLineRecords, sourceLocationLabel } from './sourceLocations';
 
-type SourceEvidence = Pick<components['schemas']['EvidenceRef'], 'element' | 'selection'>;
+type SourceEvidence = Pick<components['schemas']['CapturedAnswerSource'], 'element'> & Pick<components['schemas']['SourceCitation'], 'selection'>;
 type Anchor = components['schemas']['SourceAnchor'];
 
 function anchor(values: Pick<Anchor, 'kind'> & Partial<Anchor>): Anchor {

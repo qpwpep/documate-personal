@@ -83,7 +83,7 @@ export class AgentSessionClient {
     const controller = new AbortController();
     const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
     let receivedFinal = false;
-    let requestId: string | undefined;
+    let executionId: string | undefined;
     let timedOut = false;
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
     const resetIdleTimeout = () => {
@@ -111,14 +111,14 @@ export class AgentSessionClient {
         signal,
       });
       resetIdleTimeout();
-      requestId = response.headers.get('X-Request-ID') ?? undefined;
+      executionId = response.headers.get('X-Execution-ID') ?? undefined;
       if (response.status !== 200) {
         throw new ApiError('http_error', '서버의 처리 결과를 확인하지 못했습니다. 질문을 자동으로 다시 보내지 않습니다.', {
-          status: response.status, requestId,
+          status: response.status, executionId,
         });
       }
       if (response.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() !== 'text/event-stream' || !response.body) {
-        throw new ApiError('invalid_stream', '서버의 스트리밍 응답 형식이 올바르지 않습니다.', { requestId });
+        throw new ApiError('invalid_stream', '서버의 스트리밍 응답 형식이 올바르지 않습니다.', { executionId });
       }
       const body = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
         transform(chunk, streamController) {
@@ -128,7 +128,7 @@ export class AgentSessionClient {
       }));
       for await (const raw of parseSseStream(body)) {
         const event = parseAgentEvent(raw.event, raw.data);
-        if (event.event === 'request_started') requestId = requestId ?? event.data.request_id;
+        if (event.event === 'request_started') executionId = executionId ?? event.data.execution_id;
         if (event.event === 'final_response') {
           receivedFinal = true;
           this.manifest = event.data.upload_manifest;
@@ -138,21 +138,21 @@ export class AgentSessionClient {
         yield event;
         if (event.event === 'done') break;
       }
-      throw new ApiError('missing_final_response', '최종 응답을 받기 전에 연결이 끝났습니다. 서버에서 요청이 처리되었을 수 있습니다.', { requestId });
+      throw new ApiError('missing_final_response', '최종 응답을 받기 전에 연결이 끝났습니다. 서버에서 요청이 처리되었을 수 있습니다.', { executionId });
     } catch (error) {
       if (timedOut) {
-        throw new ApiError('timeout', '응답 대기 시간이 초과되었습니다. 서버에서 요청이 처리되었을 수 있습니다.', { requestId, cause: error });
+        throw new ApiError('timeout', '응답 대기 시간이 초과되었습니다. 서버에서 요청이 처리되었을 수 있습니다.', { executionId, cause: error });
       }
       if (signal.aborted) {
-        throw new ApiError('aborted', '응답 수신을 중단했습니다. 서버 작업은 계속될 수 있습니다.', { requestId, cause: error });
+        throw new ApiError('aborted', '응답 수신을 중단했습니다. 서버 작업은 계속될 수 있습니다.', { executionId, cause: error });
       }
       if (error instanceof ApiError) {
         if (error.code === 'invalid_response') {
-          throw new ApiError('invalid_stream', '스트리밍 응답을 검증하지 못했습니다. 서버의 처리 결과를 확인해 주세요.', { requestId, cause: error });
+          throw new ApiError('invalid_stream', '스트리밍 응답을 검증하지 못했습니다. 서버의 처리 결과를 확인해 주세요.', { executionId, cause: error });
         }
         throw error;
       }
-      throw new ApiError('stream_error', '응답을 끝까지 받지 못했습니다. 서버에서 요청이 처리되었을 수 있습니다.', { requestId, cause: error });
+      throw new ApiError('stream_error', '응답을 끝까지 받지 못했습니다. 서버에서 요청이 처리되었을 수 있습니다.', { executionId, cause: error });
     } finally {
       clearTimeout(idleTimer);
       controller.abort();
@@ -162,7 +162,7 @@ export class AgentSessionClient {
 }
 
 async function requestJson(url: string, init: RequestInit, options: RequestOptions, timeoutMs = DEFAULT_LOOKUP_TIMEOUT_MS): Promise<unknown> {
-  let requestId: string | undefined;
+  let executionId: string | undefined;
   const controller = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
   let timedOut = false;
@@ -174,34 +174,34 @@ async function requestJson(url: string, init: RequestInit, options: RequestOptio
     const headers = new Headers(init.headers);
     headers.set('Accept', 'application/json');
     const response = await fetch(url, { ...init, headers, redirect: 'manual', signal });
-    requestId = response.headers.get('X-Request-ID') ?? undefined;
+    executionId = response.headers.get('X-Execution-ID') ?? undefined;
     let value: unknown;
     try {
       value = await response.json();
     } catch (error) {
       if (!(error instanceof SyntaxError)) throw error;
-      if (response.status === 200) throw new ApiError('invalid_response', '서버 응답의 형식을 확인하지 못했습니다.', { requestId, cause: error });
+      if (response.status === 200) throw new ApiError('invalid_response', '서버 응답의 형식을 확인하지 못했습니다.', { executionId, cause: error });
     }
-    if (response.status !== 200) throw httpError(response.status, requestId, value);
+    if (response.status !== 200) throw httpError(response.status, executionId, value);
     return value;
   } catch (error) {
     if (error instanceof ApiError) throw error;
-    if (timedOut) throw new ApiError('timeout', '서버 상태 확인 시간이 초과되었습니다.', { requestId, cause: error });
-    if (options.signal?.aborted) throw new ApiError('aborted', '상태 확인을 중단했습니다.', { requestId, cause: error });
-    throw new ApiError('connection_error', '서버 상태를 확인하지 못했습니다. 다시 확인해 주세요.', { requestId, cause: error });
+    if (timedOut) throw new ApiError('timeout', '서버 상태 확인 시간이 초과되었습니다.', { executionId, cause: error });
+    if (options.signal?.aborted) throw new ApiError('aborted', '상태 확인을 중단했습니다.', { executionId, cause: error });
+    throw new ApiError('connection_error', '서버 상태를 확인하지 못했습니다. 다시 확인해 주세요.', { executionId, cause: error });
   } finally {
     clearTimeout(timer);
   }
 }
 
-function httpError(status: number, requestId: string | undefined, value: unknown): ApiError {
+function httpError(status: number, executionId: string | undefined, value: unknown): ApiError {
   const fallback = '서버의 처리 결과를 확인하지 못했습니다. 자동으로 다시 요청하지 않습니다.';
   if (value === null || typeof value !== 'object' || !('detail' in value)) {
-    return new ApiError('http_error', fallback, { status, requestId });
+    return new ApiError('http_error', fallback, { status, executionId });
   }
   const detail = value.detail;
   if (detail === null || typeof detail !== 'object' || Array.isArray(detail)) {
-    return new ApiError('http_error', typeof detail === 'string' ? detail : fallback, { status, requestId });
+    return new ApiError('http_error', typeof detail === 'string' ? detail : fallback, { status, executionId });
   }
   const files: UploadFailure[] = [];
   if ('files' in detail && Array.isArray(detail.files)) {
@@ -218,5 +218,5 @@ function httpError(status: number, requestId: string | undefined, value: unknown
   }
   return new ApiError('code' in detail && typeof detail.code === 'string' ? detail.code : 'http_error',
     'message' in detail && typeof detail.message === 'string' ? detail.message : fallback,
-    { status, requestId, files });
+    { status, executionId, files });
 }

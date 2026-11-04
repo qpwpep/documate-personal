@@ -5,13 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { components } from '../api/generated';
 import { EvidencePanel } from './EvidencePanel';
 
-type Citation = components['schemas']['Citation'];
+type Citation = components['schemas']['SourceCitation'];
+type CapturedSource = components['schemas']['CapturedAnswerSource'];
+type PanelSource = { citation: Citation; source: CapturedSource };
+type SourceOverride = Partial<CapturedSource & Pick<Citation, 'selection'>>;
 
-function citation(text: string, overrides: Partial<Citation['evidence']> = {}): Citation {
+function citation(text: string, overrides: SourceOverride = {}): PanelSource {
+  const { selection = { start: 0, end: Array.from(text).length, cell_ids: [] }, ...sourceOverrides } = overrides;
   return {
-    number: 1,
-    evidence: {
-      id: 'ref:retained',
+    citation: { number: 1, evidence_id: 'ref:retained', source_id: 'source:retained', selection },
+    source: {
       snapshot: {
         snapshot_id: 'snapshot:retained', document_id: 'doc:retained', content_hash: `sha256:${'a'.repeat(64)}`,
         source_uri: 'https://docs.example.test/guide/page.html', title: '보관된 자료', media_type: 'text/markdown',
@@ -20,21 +23,20 @@ function citation(text: string, overrides: Partial<Citation['evidence']> = {}): 
       },
       element: { element_id: 'element:retained', kind: 'paragraph', text, anchors: [], heading_path: ['Guide', 'Example'],
         parent_id: null, order: 0, heading_level: null, language: null, table: null, metadata: {} },
-      selection: { start: 0, end: Array.from(text).length, cell_ids: [] },
-      ...overrides,
+      ...sourceOverrides,
     },
   };
 }
 
 function Harness({ source, context = [] }: {
-  source: Citation;
+  source: PanelSource;
   context?: { text: string; isCode?: boolean; inline?: boolean }[];
 }) {
   const [opener, setOpener] = useState<HTMLButtonElement | null>(null);
   return <>
     <button type="button">다른 답변의 근거</button>
     <button type="button" onClick={(event) => setOpener(event.currentTarget)}>이 답변의 근거</button>
-    {opener && <EvidencePanel citation={source} context={context} opener={opener} onClose={() => setOpener(null)} />}
+    {opener && <EvidencePanel {...source} context={context} opener={opener} onClose={() => setOpener(null)} />}
   </>;
 }
 

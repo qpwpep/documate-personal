@@ -2,15 +2,15 @@ export type UploadFailure = { name?: string; code?: string; message?: string; fi
 
 export class ApiError extends Error {
   readonly code: string;
-  readonly requestId?: string;
+  readonly executionId?: string;
   readonly status?: number;
   readonly files: UploadFailure[];
 
-  constructor(code: string, message: string, details: { requestId?: string; status?: number; cause?: unknown; files?: UploadFailure[] } = {}) {
+  constructor(code: string, message: string, details: { executionId?: string; status?: number; cause?: unknown; files?: UploadFailure[] } = {}) {
     super(message, { cause: details.cause });
     this.name = 'ApiError';
     this.code = code;
-    this.requestId = details.requestId;
+    this.executionId = details.executionId;
     this.status = details.status;
     this.files = details.files ?? [];
   }

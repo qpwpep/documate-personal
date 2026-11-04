@@ -8,6 +8,7 @@ type ObservedEvent = { event: string; data: Record<string, unknown> };
 declare global {
   interface Window {
     lifecycleEvents: Record<string, ObservedEvent[]>;
+    lifecycleExecutionIds: Record<string, string | null>;
     lifecycleErrors: string[];
   }
 }
@@ -15,6 +16,7 @@ declare global {
 async function observeStreams(page: Page) {
   await page.addInitScript(() => {
     window.lifecycleEvents = {};
+    window.lifecycleExecutionIds = {};
     window.lifecycleErrors = [];
     const originalFetch = window.fetch.bind(window);
     window.fetch = async (input, init) => {
@@ -22,6 +24,7 @@ async function observeStreams(page: Page) {
       const url = typeof input === 'string' ? input : input instanceof Request ? input.url : input.href;
       if (!url.endsWith('/agent/stream') || typeof init?.body !== 'string') return response;
       const { query } = JSON.parse(init.body) as { query: string };
+      window.lifecycleExecutionIds[query] = response.headers.get('X-Execution-ID');
       const events: ObservedEvent[] = [];
       window.lifecycleEvents[query] = events;
       // Observe a clone; the application's own SSE parser still consumes the
@@ -83,7 +86,7 @@ async function captureFinalViewport(page: Page, filename: string) {
   await page.screenshot({ path: test.info().outputPath(filename) });
 }
 
-test('heartbeats keep pre-validation and same-session lock waits alive until both real requests complete', async ({ page, request }) => {
+test('heartbeats keep body validation and same-session lock waits alive until both real requests complete', async ({ page, request }) => {
   const firstQuery = '의미 검증 연결 유지 확인';
   const queuedQuery = '같은 세션 잠금 연결 유지 확인';
   await request.post(`${fixtureUrl}/_fixture/decisions/hold`, { data: { query: firstQuery } });
@@ -110,7 +113,7 @@ test('heartbeats keep pre-validation and same-session lock waits alive until bot
       const observed = await eventsFor(page, query);
       const started = observed.find((event) => event.event === 'request_started')!;
       const heartbeat = observed.find((event) => event.event === 'heartbeat')!;
-      expect(heartbeat.data).toEqual({ request_id: started.data.request_id, elapsed_ms: expect.any(Number) });
+      expect(heartbeat.data).toEqual({ execution_id: started.data.execution_id, elapsed_ms: expect.any(Number) });
       expect(heartbeat.data.elapsed_ms).toBeGreaterThan(0);
     }
   } finally {
@@ -119,6 +122,17 @@ test('heartbeats keep pre-validation and same-session lock waits alive until bot
   await expect(page.getByText(answer, { exact: true })).toBeVisible();
   await expect(page.getByText('답변 받음', { exact: true })).toBeVisible();
   await expect.poll(async () => (await eventsFor(page, queuedQuery)).find((event) => event.event === 'final_response')?.data.status).toBe('completed');
+  await expect.poll(async () => (await eventsFor(page, firstQuery)).some((event) => event.event === 'final_response')).toBe(true);
+  for (const query of [firstQuery, queuedQuery]) {
+    const executionId = await page.evaluate((value) => window.lifecycleExecutionIds[value], query);
+    expect(executionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    const observed = await eventsFor(page, query);
+    for (const event of observed.filter((item) => ['request_started', 'heartbeat', 'final_response'].includes(item.event))) {
+      expect(event.data.execution_id).toBe(executionId);
+    }
+  }
+  expect(await page.evaluate(([first, queued]) => window.lifecycleExecutionIds[first] !== window.lifecycleExecutionIds[queued],
+    [firstQuery, queuedQuery])).toBe(true);
   expect(await page.evaluate(() => window.lifecycleErrors)).toEqual([]);
 });
 
@@ -162,10 +176,13 @@ test('a natural-language copy save reuses the original artifact after semantic r
   const initialQuery = '한글 답변을 작성해줘';
   await ask(page, initialQuery);
   await expect(page.getByText(answer, { exact: true })).toBeVisible();
+  await expect.poll(async () => (await eventsFor(page, initialQuery)).some((item) => item.event === 'final_response')).toBe(true);
+  const initialEvent = (await eventsFor(page, initialQuery)).find((item) => item.event === 'final_response')!;
+  const initialAnswer = (initialEvent.data as unknown as AgentResponse).response!;
   const saved = page.waitForResponse((response) => response.request().method() === 'POST' && response.url().endsWith('/save'));
   await page.getByRole('button', { name: 'TXT 파일 만들기', exact: true }).click();
   const original = await (await saved).json() as AnswerExportResult;
-  const initialReceipt = original.response.actions.find((receipt) => receipt.kind === 'save_text')!;
+  const initialReceipt = original.receipt;
   const firstLink = page.getByRole('link', { name: 'TXT 다운로드', exact: true });
   await expect(firstLink).toBeVisible();
   const href = (await firstLink.getAttribute('href'))!;
@@ -178,8 +195,8 @@ test('a natural-language copy save reuses the original artifact after semantic r
   const event = (await eventsFor(page, query)).find((item) => item.event === 'final_response')!;
   const result = event.data as unknown as AgentResponse;
   expect(result.status).toBe('completed');
-  expect(result.response!.content).toEqual(original.response.content);
-  expect(result.response!.semantic_validation).not.toEqual(original.response.semantic_validation);
+  expect(result.response!.content).toEqual(initialAnswer.content);
+  expect(result.response!.semantic_validation).not.toEqual(initialAnswer.semantic_validation);
   const receipt = result.response!.actions.find((item) => item.kind === 'save_text')!;
   expect(receipt.operation).toEqual(initialReceipt.operation);
   expect(receipt.artifact).toEqual(initialReceipt.artifact);

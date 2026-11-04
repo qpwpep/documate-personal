@@ -8,7 +8,7 @@ export type AgentRequest = components['schemas']['AgentRequest'];
 export type RecipientInput = components['schemas']['RecipientInput'];
 export type SlackDefault = components['schemas']['SlackDefault'];
 export type AnswerExportResult = components['schemas']['AnswerExportResult'];
-export type AnswerResponse = components['schemas']['AnswerResponse'];
+export type AnswerResponse = components['schemas']['SourcedAnswerPayload'];
 export type AgentResponse = components['schemas']['AgentResponse'];
 
 export type AgentStreamEvent = {

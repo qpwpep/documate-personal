@@ -21,14 +21,14 @@ const operation = { operation_id: 'save-selected-answer', session_id: 'delivery-
   contract_revision: 1, target_kind: 'copy_answer' as const, source_hash: answer.content_hash,
   answer_hash: answer.content_hash, export_profile: 'answer-text-v1/utf-8-sig' as const,
   payload_sha256: artifact.sha256, byte_count: artifact.byte_count };
-const completed: AnswerExportResult = { status: 'completed', answer_id: 'selected-answer', request_id: 'export-1',
-  message: 'TXT 파일을 저장했습니다.', response: { ...answer, actions: [{ kind: 'save_text', status: 'success',
+const completed: AnswerExportResult = { status: 'completed', answer_id: 'selected-answer', execution_id: 'export-1',
+  message: 'TXT 파일을 저장했습니다.', receipt: { kind: 'save_text', status: 'success',
     verification: 'verified', artifact, operation, file_path: 'output/save_text/답변 결과.txt',
-    invocation_id: null, slack: null, previous_slack: null, message: 'TXT 파일을 저장했습니다.', error: null, error_code: null }] } };
+    invocation_id: null, slack: null, previous_slack: null, message: 'TXT 파일을 저장했습니다.', error: null, error_code: null } };
 const failed: AnswerExportResult = { ...completed, status: 'failed', message: '파일을 만들지 못했습니다. 기존 답변은 유지됩니다.',
-  response: { ...answer, actions: [{ kind: 'save_text', status: 'error', verification: 'failed', artifact: null,
+  receipt: { kind: 'save_text', status: 'error', verification: 'failed', artifact: null,
     operation, error_code: 'write_failed', error: '파일을 만들지 못했습니다.', file_path: null,
-    invocation_id: null, slack: null, previous_slack: null, message: '파일을 만들지 못했습니다.' }] } };
+    invocation_id: null, slack: null, previous_slack: null, message: '파일을 만들지 못했습니다.' } };
 
 let apiBaseUrl = '';
 let mode: 'completed' | 'failed' | 'unavailable' | 'hold' = 'completed';
@@ -117,8 +117,8 @@ describe('선택 답변 TXT 저장', () => {
   it('offers regeneration for an expired artifact and never substitutes cached answer text for an expired server session', async () => {
     mode = 'unavailable';
     const user = userEvent.setup();
-    const expired: AnswerExportResult = { ...completed, response: { ...answer, actions: [{ ...completed.response.actions[0],
-      artifact: { ...artifact, created_at: 1, expires_at: 2 } }] } };
+    const expired: AnswerExportResult = { ...completed, receipt: { ...completed.receipt,
+      artifact: { ...artifact, created_at: 1, expires_at: 2 } } };
     render(<Delivery initial={expired} />);
     expect(screen.queryByRole('link', { name: 'TXT 다운로드' })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'TXT 다시 만들기' }));

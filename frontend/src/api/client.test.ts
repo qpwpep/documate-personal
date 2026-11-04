@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import fixtures from '../../../tests/fixtures/web_contracts/agent_responses.json';
+import sourceFixtures from '../components/AnswerView.fixtures.json';
 import { AgentSessionClient, ApiError, fetchClientConfig } from './client';
 
 const manifest = { epoch: 'confirmed', revision: 2, files: [] };
@@ -88,12 +89,27 @@ describe('browser API contract', () => {
     });
   });
 
+  it('resolves citations through the source registry and rejects a missing captured source', async () => {
+    const result = { ...fixtures.responses.completed, response: structuredClone(sourceFixtures.sectioned) };
+    respond = (_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.end(frame('final_response', result));
+    };
+    const client = new AgentSessionClient({ sessionId: 'session-1', baseUrl });
+    expect(await collect(client.stream('원문을 보여 줘'))).toEqual([{ event: 'final_response', data: result }]);
+
+    const sources: Record<string, unknown> = result.response.sources;
+    delete sources[result.response.citations[0].source_id];
+    await expect(collect(client.stream('같은 자료를 보여 줘'))).rejects.toMatchObject({ code: 'invalid_stream' });
+    expect(client.manifest).toBeNull();
+  });
+
   it.each(['request_timeout', 'answer_validation_failed'])('preserves the server %s problem and request ID without resubmitting', async (code) => {
     const result = {
       ...fixtures.responses.failed,
       message: `서버가 보낸 실행 결과: ${code}`,
       problem: { ...fixtures.responses.failed.problem, code, message: `서버가 확인한 실패 사유: ${code}` },
-      request_id: `server-request-${code}`,
+      execution_id: `server-request-${code}`,
     };
     respond = (_request, response) => {
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -128,12 +144,12 @@ describe('browser API contract', () => {
 
   it.each(fixtures.invalid_events)('rejects the shared invalid $event event before accepting a later answer', async ({ event, data }) => {
     respond = (_request, response) => {
-      response.writeHead(200, { 'Content-Type': 'text/event-stream', 'X-Request-ID': 'invalid-event' });
+      response.writeHead(200, { 'Content-Type': 'text/event-stream', 'X-Execution-ID': 'invalid-event' });
       response.end(frame(event, data) + frame('final_response', fixtures.responses.completed));
     };
     const client = new AgentSessionClient({ sessionId: 'session-1', baseUrl });
 
-    await expect(collect(client.stream('질문'))).rejects.toMatchObject({ code: 'invalid_stream', requestId: 'invalid-event' });
+    await expect(collect(client.stream('질문'))).rejects.toMatchObject({ code: 'invalid_stream', executionId: 'invalid-event' });
     expect(client.manifest).toBeNull();
     expect(requests.filter(({ method }) => method === 'POST')).toHaveLength(1);
   });
@@ -159,12 +175,12 @@ describe('browser API contract', () => {
 
   it.each([{ payload: [] }, { payload: null }, { payload: 'text' }])('rejects a non-object event payload at the API boundary: $payload', async ({ payload }) => {
     respond = (_request, response) => {
-      response.writeHead(200, { 'Content-Type': 'text/event-stream', 'X-Request-ID': 'invalid-payload' });
+      response.writeHead(200, { 'Content-Type': 'text/event-stream', 'X-Execution-ID': 'invalid-payload' });
       response.end(frame('final_response', payload));
     };
     const client = new AgentSessionClient({ sessionId: 'session-1', baseUrl });
 
-    await expect(collect(client.stream('질문'))).rejects.toMatchObject({ code: 'invalid_stream', requestId: 'invalid-payload' });
+    await expect(collect(client.stream('질문'))).rejects.toMatchObject({ code: 'invalid_stream', executionId: 'invalid-payload' });
     expect(client.manifest).toBeNull();
     expect(requests.filter(({ method }) => method === 'POST')).toHaveLength(1);
   });
@@ -223,21 +239,21 @@ describe('browser API contract', () => {
     ['malformed manifest', { ...fixtures.responses.completed, upload_manifest: { epoch: 'x', revision: '2', files: [] } }],
   ])('rejects %s at the response boundary', async (_name, result) => {
     respond = (_request, response) => {
-      response.writeHead(200, { 'Content-Type': 'text/event-stream', 'X-Request-ID': 'request-invalid' });
+      response.writeHead(200, { 'Content-Type': 'text/event-stream', 'X-Execution-ID': 'request-invalid' });
       response.end(frame('final_response', result));
     };
     const client = new AgentSessionClient({ sessionId: 'session-1', baseUrl });
-    await expect(collect(client.stream('질문'))).rejects.toMatchObject({ code: 'invalid_stream', requestId: 'request-invalid' });
+    await expect(collect(client.stream('질문'))).rejects.toMatchObject({ code: 'invalid_stream', executionId: 'request-invalid' });
     expect(client.manifest).toBeNull();
   });
 
   it.each([307, 503])('does not redirect or retry an HTTP %s response', async (status) => {
     respond = (_request, response) => {
-      response.writeHead(status, { Location: '/forwarded', 'X-Request-ID': 'http-request' });
+      response.writeHead(status, { Location: '/forwarded', 'X-Execution-ID': 'http-request' });
       response.end();
     };
     const client = new AgentSessionClient({ sessionId: 'session-1', baseUrl });
-    await expect(collect(client.stream('저장해줘'))).rejects.toMatchObject({ code: 'http_error', status, requestId: 'http-request' });
+    await expect(collect(client.stream('저장해줘'))).rejects.toMatchObject({ code: 'http_error', status, executionId: 'http-request' });
     expect(client.manifest).toBeNull();
     expect(requests.map(({ path }) => path)).toEqual(['/sessions/session-1/uploads', '/agent/stream']);
   });
@@ -255,14 +271,14 @@ describe('browser API contract', () => {
   it('stops receiving on abort and leaves server confirmation unknown', async () => {
     respond = (_request, response) => {
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
-      response.write(frame('request_started', { request_id: 'request-pending', session_id: 'session-1' }));
+      response.write(frame('request_started', { execution_id: 'request-pending', session_id: 'session-1' }));
     };
     const client = new AgentSessionClient({ sessionId: 'session-1', baseUrl });
     const controller = new AbortController();
     const events = client.stream('저장해줘', { signal: controller.signal });
     expect((await events.next()).value?.event).toBe('request_started');
     controller.abort();
-    await expect(events.next()).rejects.toMatchObject({ code: 'aborted', requestId: 'request-pending' });
+    await expect(events.next()).rejects.toMatchObject({ code: 'aborted', executionId: 'request-pending' });
     expect(client.manifest).toBeNull();
     expect(requests.filter(({ method }) => method === 'POST')).toHaveLength(1);
   });
@@ -286,7 +302,7 @@ describe('browser API contract', () => {
     respond = (_request, response) => {
       if (stage === 'body') {
         response.writeHead(200, { 'Content-Type': 'text/event-stream' });
-        response.write(frame('request_started', { request_id: 'idle-request', session_id: 'session-1' }));
+        response.write(frame('request_started', { execution_id: 'idle-request', session_id: 'session-1' }));
       }
       received();
     };
@@ -307,7 +323,7 @@ describe('browser API contract', () => {
     respond = (_request, response) => {
       pendingResponse = response;
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
-      response.write(frame('request_started', { request_id: 'active-request', session_id: 'session-1' }));
+      response.write(frame('request_started', { execution_id: 'active-request', session_id: 'session-1' }));
     };
     const client = new AgentSessionClient({ sessionId: 'session-1', baseUrl, timeoutMs: 100 });
     const events = client.stream('오래 걸리는 질문');
@@ -315,7 +331,7 @@ describe('browser API contract', () => {
     for (let index = 1; index <= 3; index += 1) {
       await vi.advanceTimersByTimeAsync(60);
       const next = events.next();
-      pendingResponse?.write(frame('heartbeat', { request_id: 'active-request', elapsed_ms: index * 60 }));
+      pendingResponse?.write(frame('heartbeat', { execution_id: 'active-request', elapsed_ms: index * 60 }));
       expect((await next).value?.event).toBe('heartbeat');
     }
     pendingResponse?.end(frame('final_response', fixtures.responses.completed));

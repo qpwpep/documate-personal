@@ -154,7 +154,7 @@ describe('질문 화면과 실제 HTTP 클라이언트', () => {
       ...fixtures.responses.failed,
       message: `서버 실행 결과 안내: ${code}`,
       problem: { ...fixtures.responses.failed.problem, code, message: `서버가 확인한 원인 안내: ${code}` },
-      request_id: `server-request-${code}`,
+      execution_id: `server-request-${code}`,
     };
     const user = userEvent.setup();
     render(<App apiBaseUrl={apiBaseUrl} />);
@@ -167,7 +167,7 @@ describe('질문 화면과 실제 HTTP 클라이언트', () => {
     expect(await screen.findByText(result.message)).toBeVisible();
     expect(screen.getByText(result.problem.message)).toBeVisible();
     await user.click(screen.getByText('요청 정보', { exact: true }));
-    expect(screen.getByText(`요청 ID: ${result.request_id}`)).toBeVisible();
+    expect(screen.getByText(`요청 ID: ${result.execution_id}`)).toBeVisible();
     expect(requests).toHaveLength(1);
     expect(JSON.parse(requests[0]).query).toBe('실패 원인을 확인해 줘');
   });
@@ -178,7 +178,7 @@ describe('질문 화면과 실제 HTTP 클라이언트', () => {
       ...fixtures.responses.partial,
       message: '서버가 확보한 범위의 답변입니다.',
       problem: { ...fixtures.responses.partial.problem, message: '서버는 비교 대상의 두 번째 근거를 확보하지 못했습니다.' },
-      request_id: 'server-request-evidence-insufficient',
+      execution_id: 'server-request-evidence-insufficient',
     };
     const user = userEvent.setup();
     render(<App apiBaseUrl={apiBaseUrl} />);
@@ -191,7 +191,7 @@ describe('질문 화면과 실제 HTTP 클라이언트', () => {
     expect(await screen.findByText('확인한 첫 번째 자료의 답변 🧪')).toBeVisible();
     expect(within(screen.getByRole('region', { name: '부분 답변' })).getByText(result.problem.message)).toBeVisible();
     await user.click(screen.getByText('답변 정보', { exact: true }));
-    expect(screen.getByText(`요청 ID: ${result.request_id}`)).toBeVisible();
+    expect(screen.getByText(`요청 ID: ${result.execution_id}`)).toBeVisible();
     expect(requests).toHaveLength(1);
   });
 

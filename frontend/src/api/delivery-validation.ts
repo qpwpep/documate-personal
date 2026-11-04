@@ -21,10 +21,9 @@ export function parseSlackDefault(value: unknown): SlackDefault {
 
 export function parseAnswerExport(value: unknown, answerId: string): AnswerExportResult {
   if (!answerExportValidator(value) || value.answer_id !== answerId) throw invalidResponse();
-  validateActionReceipts(value.response);
-  const receipts = value.response.actions.filter((receipt) => receipt.kind === 'save_text');
-  if (receipts.length !== 1) throw invalidResponse();
-  const receipt = receipts[0];
+  const receipt = value.receipt;
+  validateActionReceipts([receipt]);
+  if (receipt.kind !== 'save_text') throw invalidResponse();
   const complete = receipt.status === 'success';
   if ((value.status === 'completed') !== complete) throw invalidResponse();
   return value;

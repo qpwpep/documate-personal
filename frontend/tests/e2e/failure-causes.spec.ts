@@ -10,7 +10,7 @@ const cases = [
 ] as const;
 
 for (const scenario of cases) {
-  test(`${scenario.code}${scenario.upload ? ' with uploaded evidence' : ''} keeps the server cause and request ID without automatically resubmitting`, async ({ page, request }) => {
+  test(`${scenario.code}${scenario.upload ? ' with uploaded evidence' : ''} keeps the server cause and execution ID without automatically resubmitting`, async ({ page, request }) => {
     await page.goto('./');
     if (scenario.upload) {
       await page.getByText('첨부 자료', { exact: true }).click();
@@ -26,11 +26,14 @@ for (const scenario of cases) {
     const streamed = page.waitForResponse((response) =>
       response.url().endsWith('/agent/stream') && response.request().method() === 'POST');
     await submit.click();
-    expect((await streamed).status()).toBe(200);
+    const transport = await streamed;
+    expect(transport.status()).toBe(200);
+    const executionId = transport.headers()['x-execution-id'];
+    expect(executionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     // The client closes SSE after final_response, so observe its persisted
     // result instead of racing Chromium's access to the cancelled stream body.
     const storedResult = await page.waitForFunction((query) => {
-      const snapshot = JSON.parse(sessionStorage.getItem('documate.react.conversations.v1') ?? 'null') as {
+      const snapshot = JSON.parse(sessionStorage.getItem('documate.react.conversations') ?? 'null') as {
         conversations: { turns: { query: string; result: AgentResponse | null }[] }[];
       } | null;
       return snapshot?.conversations.flatMap((conversation) => conversation.turns)
@@ -40,12 +43,12 @@ for (const scenario of cases) {
 
     expect(result.status).toBe(scenario.status);
     expect(result.problem?.code).toBe(scenario.code);
-    expect(result.request_id).toMatch(/^[0-9a-f]{8}$/);
+    expect(result.execution_id).toBe(executionId);
     const hasAnswer = scenario.status === 'partial';
     const cause = hasAnswer ? page.getByRole('region', { name: '부분 답변' }) : page;
     await expect(cause.getByText(result.problem!.message, { exact: true })).toBeVisible();
     await page.getByText(hasAnswer ? '답변 정보' : '요청 정보', { exact: true }).click();
-    await expect(page.getByText(`요청 ID: ${result.request_id}`, { exact: true })).toBeVisible();
+    await expect(page.getByText(`실행 ID: ${result.execution_id}`, { exact: true })).toBeVisible();
     if (hasAnswer) await expect(page.getByText('alpha = 1', { exact: true }).first()).toBeVisible();
     else await expect(page.locator('.answer-body')).toHaveCount(0);
 

@@ -215,67 +215,6 @@ export interface components {
             /** @default null */
             slack_notify: components["schemas"]["SlackDelivery"] | null;
         };
-        /** AgentDebugInfo */
-        AgentDebugInfo: {
-            /** @default null */
-            action_results: components["schemas"]["ActionResults"] | null;
-            /** @default null */
-            answer_provenance: components["schemas"]["AnswerProvenance"] | null;
-            /** Error Codes */
-            error_codes: ("provider_schema_invalid" | "provider_configuration" | "provider_unavailable" | "provider_rate_limited" | "model_output_invalid" | "model_output_incomplete" | "model_refusal" | "internal_error" | "evidence_insufficient" | "call_budget_exhausted" | "request_timeout" | "answer_validation_failed" | "upload_revision_conflict" | "save_failed" | "PLANNER_SCHEMA_INVALID" | "PLANNER_TIMEOUT" | "RETRIEVAL_DOCS_TIMEOUT" | "RETRIEVAL_DOCS_FAILED" | "RAG_INDEX_MISSING" | "LOCAL_RAG_FAILED" | "UPLOAD_RETRIEVER_BUILD_FAILED" | "LLM_STRUCTURED_EMPTY" | "SYNTHESIS_TIMEOUT" | "VALIDATION_UNRESOLVED_REFERENCES" | "VALIDATION_MISSING_CONTENT" | "DEBUG_NORMALIZATION_FAILED" | "SLACK_RECIPIENT_MISSING" | "SLACK_RECIPIENT_INVALID" | "SLACK_RECIPIENT_AMBIGUOUS" | "SLACK_RECIPIENT_CONFLICT" | "SLACK_CONFIGURATION_ERROR" | "SLACK_TARGET_NOT_FOUND" | "SLACK_TARGET_UNAVAILABLE" | "SLACK_PERMISSION_DENIED" | "SLACK_AUTHENTICATION_FAILED" | "SLACK_RATE_LIMITED" | "SLACK_TEMPORARY_FAILURE" | "SLACK_DELIVERY_UNKNOWN" | "SLACK_PROTOCOL_ERROR" | "UPLOAD_PATH_INVALID")[];
-            /** Errors */
-            errors: string[];
-            /** @default null */
-            execution_evidence: components["schemas"]["ToolExecutionEvidence"] | null;
-            /** @default null */
-            latency_breakdown: components["schemas"]["LatencyBreakdownModel"] | null;
-            /**
-             * Latency Ms Server
-             * @default null
-             */
-            latency_ms_server: number | null;
-            /**
-             * Llm Calls
-             * @default null
-             */
-            llm_calls: components["schemas"]["LLMCallRecord"][] | null;
-            /** Llm Diagnostics */
-            llm_diagnostics: components["schemas"]["LLMDiagnostic"][];
-            /** Memory Compactions */
-            memory_compactions: {
-                [key: string]: unknown;
-            }[];
-            /** Missing Required Debug Fields */
-            missing_required_debug_fields: string[];
-            /**
-             * Observability Status
-             * @enum {string}
-             */
-            observability_status: "ok" | "degraded" | "failed";
-            /** Observed Hits */
-            observed_hits: components["schemas"]["SearchHit"][];
-            /** @default null */
-            planner_diagnostics: components["schemas"]["PlannerDiagnostic"] | null;
-            /** Planner Errors */
-            planner_errors: string[];
-            /** Retrieval Diagnostics */
-            retrieval_diagnostics: components["schemas"]["RetrievalDiagnostic"][];
-            /** @default null */
-            retry_context: components["schemas"]["RetryState"] | null;
-            /** Route Decisions */
-            route_decisions: components["schemas"]["RoutingDecision"][];
-            /** Schema Version */
-            schema_version: number;
-            /**
-             * Tool Call Count
-             * @default 0
-             */
-            tool_call_count: number;
-            /** Tool Calls */
-            tool_calls: string[];
-            /** Validation Events */
-            validation_events: string[];
-        };
         /** AgentRequest */
         AgentRequest: {
             /**
@@ -298,7 +237,13 @@ export interface components {
              */
             answer_id: string | null;
             /** @default null */
-            debug: components["schemas"]["AgentDebugInfo"] | null;
+            debug: components["schemas"]["DebugPayload"] | null;
+            /**
+             * Execution Id
+             * @description ID of this execution, not the domain request ID.
+             * @default
+             */
+            execution_id: string;
             /**
              * Message
              * @default
@@ -308,14 +253,8 @@ export interface components {
             missing_slots: string[];
             /** @default null */
             problem: components["schemas"]["ExecutionProblem"] | null;
-            /**
-             * Request Id
-             * @description ID of this execution, not the domain request ID.
-             * @default
-             */
-            request_id: string;
             /** @default null */
-            response: components["schemas"]["AnswerResponse"] | null;
+            response: components["schemas"]["SourcedAnswerPayload"] | null;
             /**
              * Status
              * @default completed
@@ -337,19 +276,19 @@ export interface components {
         };
         /**
          * AnswerExportResult
-         * @description A saved answer retains its body even when the filesystem operation fails.
+         * @description An export reports its receipt while the displayed answer retains its body.
          */
         AnswerExportResult: {
             /** Answer Id */
             answer_id: string;
-            /** Message */
-            message: string;
             /**
-             * Request Id
+             * Execution Id
              * @description ID of this export execution, renewed on retry.
              */
-            request_id: string;
-            response: components["schemas"]["AnswerResponse"];
+            execution_id: string;
+            /** Message */
+            message: string;
+            receipt: components["schemas"]["ActionReceipt"];
             /**
              * Status
              * @enum {string}
@@ -397,30 +336,6 @@ export interface components {
              * @constant
              */
             version: 1;
-        };
-        /** AnswerResponse */
-        AnswerResponse: {
-            /** Actions */
-            actions: components["schemas"]["ActionReceipt"][];
-            /** Checks */
-            checks: components["schemas"]["UnitCheck"][];
-            /** Citations */
-            citations: components["schemas"]["Citation"][];
-            content: components["schemas"]["AnswerDocument"];
-            /**
-             * Content Hash
-             * @default
-             */
-            content_hash: string;
-            /** Issues */
-            issues: components["schemas"]["ResponseIssue"][];
-            /**
-             * Retrieval Required
-             * @default false
-             */
-            retrieval_required: boolean;
-            /** @default null */
-            semantic_validation: components["schemas"]["SemanticValidation"] | null;
         };
         /**
          * AnswerSource
@@ -471,11 +386,10 @@ export interface components {
             /** Remove */
             remove?: string[];
         };
-        /** Citation */
-        Citation: {
-            evidence: components["schemas"]["EvidenceRef"];
-            /** Number */
-            number: number;
+        /** CapturedAnswerSource */
+        CapturedAnswerSource: {
+            element: components["schemas"]["DocumentElement"];
+            snapshot: components["schemas"]["DocumentSnapshot"];
         };
         /**
          * ClientConfig
@@ -541,10 +455,81 @@ export interface components {
              * @default null
              */
             sentence_scope: number | null;
-            /** @default null */
+            /**
+             * @description Location-only content. When generating this unit, set text exactly to '<source_location>'; put source quotations and explanations in separate units with source_location=null. The server replaces only that placeholder with the verified location. Stored responses retain the rendered text.
+             * @default null
+             */
             source_location: components["schemas"]["SourceLocationReference"] | null;
             /** Text */
             text: string;
+        };
+        /**
+         * DebugPayload
+         * @description Completed observations shared by runtime, HTTP, and evaluation.
+         */
+        DebugPayload: {
+            /** @default null */
+            action_results: components["schemas"]["ActionResults"] | null;
+            /** @default null */
+            answer_provenance: components["schemas"]["AnswerProvenance"] | null;
+            /** Error Codes */
+            error_codes: ("provider_schema_invalid" | "provider_configuration" | "provider_unavailable" | "provider_rate_limited" | "model_output_invalid" | "model_output_incomplete" | "model_refusal" | "internal_error" | "evidence_insufficient" | "call_budget_exhausted" | "request_timeout" | "answer_validation_failed" | "upload_revision_conflict" | "save_failed" | "PLANNER_SCHEMA_INVALID" | "PLANNER_TIMEOUT" | "RETRIEVAL_DOCS_TIMEOUT" | "RETRIEVAL_DOCS_FAILED" | "RAG_INDEX_MISSING" | "LOCAL_RAG_FAILED" | "UPLOAD_RETRIEVER_BUILD_FAILED" | "LLM_STRUCTURED_EMPTY" | "SYNTHESIS_TIMEOUT" | "VALIDATION_UNRESOLVED_REFERENCES" | "VALIDATION_MISSING_CONTENT" | "DEBUG_NORMALIZATION_FAILED" | "SLACK_RECIPIENT_MISSING" | "SLACK_RECIPIENT_INVALID" | "SLACK_RECIPIENT_AMBIGUOUS" | "SLACK_RECIPIENT_CONFLICT" | "SLACK_CONFIGURATION_ERROR" | "SLACK_TARGET_NOT_FOUND" | "SLACK_TARGET_UNAVAILABLE" | "SLACK_PERMISSION_DENIED" | "SLACK_AUTHENTICATION_FAILED" | "SLACK_RATE_LIMITED" | "SLACK_TEMPORARY_FAILURE" | "SLACK_DELIVERY_UNKNOWN" | "SLACK_PROTOCOL_ERROR" | "UPLOAD_PATH_INVALID")[];
+            /** Errors */
+            errors: string[];
+            /** @default null */
+            execution_evidence: components["schemas"]["ToolExecutionEvidence"] | null;
+            /** @default null */
+            latency_breakdown: components["schemas"]["LatencyBreakdownModel"] | null;
+            /**
+             * Latency Ms Server
+             * @default null
+             */
+            latency_ms_server: number | null;
+            /**
+             * Llm Calls
+             * @default null
+             */
+            llm_calls: components["schemas"]["LLMCallRecord"][] | null;
+            /** Llm Diagnostics */
+            llm_diagnostics: components["schemas"]["LLMDiagnostic"][];
+            /** Memory Compactions */
+            memory_compactions: {
+                [key: string]: unknown;
+            }[];
+            /** Missing Required Debug Fields */
+            missing_required_debug_fields: string[];
+            /**
+             * Observability Status
+             * @default ok
+             * @enum {string}
+             */
+            observability_status: "ok" | "degraded" | "failed";
+            /** Observed Hits */
+            observed_hits: components["schemas"]["SearchHit"][];
+            /** @default null */
+            planner_diagnostics: components["schemas"]["PlannerDiagnostic"] | null;
+            /** Planner Errors */
+            planner_errors: string[];
+            /** Retrieval Diagnostics */
+            retrieval_diagnostics: components["schemas"]["RetrievalDiagnostic"][];
+            /** @default null */
+            retry_context: components["schemas"]["RetryState"] | null;
+            /** Route Decisions */
+            route_decisions: components["schemas"]["RoutingDecision"][];
+            /**
+             * Schema Version
+             * @default 14
+             */
+            schema_version: number;
+            /**
+             * Tool Call Count
+             * @default 0
+             */
+            tool_call_count: number;
+            /** Tool Calls */
+            tool_calls: string[];
+            /** Validation Events */
+            validation_events: string[];
         };
         /**
          * DocsSearchProviderRequest
@@ -938,7 +923,7 @@ export interface components {
         PlannedRequirement: {
             /**
              * Aspects
-             * @description Literal parameter names, option/flag names, requested value tokens or code fragments that must appear in returned source, such as axis, --force, reflect or random_state. For docs setting-meaning questions, omit ordinary data and arbitrary counts, capacities, sizes, thresholds or seeds; keep their parameter names here and complete settings in query and the body request. A value changing the result is not sufficient to make it a literal anchor. Keep categorical modes, enum members, sentinels and distinct behavior-branch values separately alongside their parameter names, including numeric or Boolean choices. Preserve an explicitly requested exact source/code match. Source locations (lines/ranges, cells, pages or document regions) belong in query and the body request, not aspects, unless explicitly requested as literal strings occurring in source. Classify by the requested role, even when location labels are quoted. Do not repeat the primary API already in symbols. For upload and docs, never put natural-language properties or conditions here; preserve their meaning in query. For docs additionally request the relevant evidence_needs. Only anchors explicitly requested in the user's dialogue belong here; never guess an identifier from the user's description of a property.
+             * @description Literal parameter names, option/flag names, requested value tokens or code fragments that must appear in returned source, such as axis, --force, reflect or random_state. For both docs and upload, aspects add source-content restrictions beyond identifying the API in symbols. Questions about a call's ownership or surrounding assignments and match/case binding belong in query and the body; they do not require those terms inside the selected call. Naming an API, requiring its actual library identity, or asking to quote its source unchanged does not require that API spelling in source. A verified import alias still qualifies. Repeat a symbol here only when the user independently requires its exact spelling and would exclude aliases; retain both fields in that case. For docs setting-meaning questions, omit ordinary data and arbitrary counts, capacities, sizes, thresholds or seeds; keep their parameter names here and complete settings in query and the body request. A value changing the result is not sufficient to make it a literal anchor. Keep categorical modes, enum members, sentinels and distinct behavior-branch values separately alongside their parameter names, including numeric or Boolean choices. Preserve an explicitly requested exact source/code match. Source locations (lines/ranges, cells, pages or document regions) belong in query and the body request, not aspects, unless explicitly requested as literal strings occurring in source. Classify by the requested role, even when location labels are quoted. For upload and docs, never put natural-language properties or conditions here; preserve their meaning in query. For docs additionally request the relevant evidence_needs. Only anchors explicitly requested in the user's dialogue belong here; never guess an identifier from the user's description of a property.
              */
             aspects: string[];
             /**
@@ -966,7 +951,7 @@ export interface components {
             match: "topic" | "symbol" | "definition";
             /**
              * Symbols
-             * @description At most one primary target. Use separate tasks for independent symbols, including each uploaded variable/constant whose value is requested. Never put a second independent variable in the first variable's aspects: symbol retrieval selects only the primary target's occurrences. Calls inspected inside a function belong in its aspects, not additional definitions.
+             * @description At most one primary target. Use a fully qualified API name when selecting calls to that API. To investigate whether an uploaded call belongs to that API, use the observed call's written name instead; do not assume the answer by canonicalizing its owner. Preserve ownership and surrounding binding questions in query and the body, not as additional literal aspects. Use separate tasks for independent symbols, including each uploaded variable/constant whose value is requested. Never put a second independent variable in the first variable's aspects: symbol retrieval selects only the primary target's occurrences. Calls inspected inside a function belong in its aspects, not additional definitions.
              */
             symbols: string[];
             /**
@@ -1468,7 +1453,15 @@ export interface components {
              * @default
              */
             requirement_id: string;
+            /**
+             * Role
+             * @default candidate
+             * @enum {string}
+             */
+            role: "candidate" | "context";
             score: components["schemas"]["RetrievalScore"];
+            /** Supporting Evidence Ids */
+            supporting_evidence_ids: string[];
         };
         /**
          * SemanticCheck
@@ -1699,6 +1692,16 @@ export interface components {
              */
             start: number | null;
         };
+        /** SourceCitation */
+        SourceCitation: {
+            /** Evidence Id */
+            evidence_id: string;
+            /** Number */
+            number: number;
+            selection: components["schemas"]["SourceSelection"];
+            /** Source Id */
+            source_id: string;
+        };
         /**
          * SourceLocationReference
          * @description A nonempty element-character range inside one supplied evidence selection.
@@ -1728,6 +1731,27 @@ export interface components {
              * @default 0
              */
             start: number;
+        };
+        /** SourcedAnswerPayload */
+        SourcedAnswerPayload: {
+            /** Actions */
+            actions: components["schemas"]["ActionReceipt"][];
+            /** Checks */
+            checks: components["schemas"]["UnitCheck"][];
+            /** Citations */
+            citations: components["schemas"]["SourceCitation"][];
+            content: components["schemas"]["AnswerDocument"];
+            /** Content Hash */
+            content_hash: string;
+            /** Issues */
+            issues: components["schemas"]["ResponseIssue"][];
+            /** Retrieval Required */
+            retrieval_required: boolean;
+            semantic_validation: components["schemas"]["SemanticValidation"] | null;
+            /** Sources */
+            sources: {
+                [key: string]: components["schemas"]["CapturedAnswerSource"];
+            };
         };
         /** StageAttemptModel */
         StageAttemptModel: {
@@ -1825,7 +1849,7 @@ export interface components {
              * Mode
              * @enum {string}
              */
-            mode: "structured_only" | "structured_empty_fallback" | "timeout_grounded_fallback" | "structured_error_plain_fallback" | "compact_structured_fallback" | "plain_summary_attach_fallback" | "korean_template_summary_fallback" | "deterministic_grounded_fallback" | "deterministic_grounded_direct";
+            mode: "structured_only" | "structured_empty_fallback" | "timeout_grounded_fallback" | "structured_error_plain_fallback" | "compact_structured_fallback" | "plain_summary_attach_fallback" | "korean_template_summary_fallback" | "deterministic_grounded_fallback";
             /**
              * Structured Ms
              * @default null
@@ -1941,10 +1965,10 @@ export interface components {
             /** Events */
             events: components["schemas"]["ToolExecutionEvent"][];
             /**
-             * Request Id
-             * @description ID of this execution, matching TurnResult.request_id; not the domain request ID.
+             * Execution Id
+             * @description ID of this execution, matching TurnResult.execution_id; not the domain request ID.
              */
-            request_id: string;
+            execution_id: string;
             /**
              * Schema Version
              * @constant
@@ -2094,7 +2118,13 @@ export interface components {
              */
             answer_id: string | null;
             /** @default null */
-            debug: components["schemas"]["AgentDebugInfo"] | null;
+            debug: components["schemas"]["DebugPayload"] | null;
+            /**
+             * Execution Id
+             * @description ID of this execution, not the domain request ID.
+             * @default
+             */
+            execution_id: string;
             /**
              * Message
              * @default
@@ -2104,14 +2134,8 @@ export interface components {
             missing_slots: string[];
             /** @default null */
             problem: components["schemas"]["ExecutionProblem"] | null;
-            /**
-             * Request Id
-             * @description ID of this execution, not the domain request ID.
-             * @default
-             */
-            request_id: string;
             /** @default null */
-            response: components["schemas"]["AnswerResponse"] | null;
+            response: components["schemas"]["SourcedAnswerPayload"] | null;
             /**
              * Status
              * @default completed
@@ -2128,7 +2152,7 @@ export interface components {
         };
         AgentStreamEvent_heartbeat: {
             elapsed_ms: number;
-            request_id: string;
+            execution_id: string;
         };
         AgentStreamEvent_progress_snapshot: {
             /** @enum {string} */
@@ -2136,7 +2160,7 @@ export interface components {
             summary: string;
         };
         AgentStreamEvent_request_started: {
-            request_id: string;
+            execution_id: string;
             session_id: string;
         };
         AgentStreamEvent_stage_completed: {
@@ -2193,7 +2217,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description UTF-8 SSE frames: event: <name>\ndata: <JSON object>\n\n. Each execution ends with one final_response carrying status, response, problem, message, request_id, trace, debug and upload_manifest. Status distinguishes completed, needs_input, failed, partial and refused; a failed result has no answer document. The manifest is captured under the session lock; null on failure means unknown state, not an empty attachment set. HTTP 200 and done alone do not indicate success. Clients must not automatically resubmit interrupted requests because agent actions may already have executed. x-sse-events maps each event name to its data schema. */
+            /** @description UTF-8 SSE frames: event: <name>\ndata: <JSON object>\n\n. Each execution ends with one final_response carrying status, response, problem, message, execution_id, trace, debug and upload_manifest. Status distinguishes completed, needs_input, failed, partial and refused; a failed result has no answer document. The manifest is captured under the session lock; null on failure means unknown state, not an empty attachment set. HTTP 200 and done alone do not indicate success. Clients must not automatically resubmit interrupted requests because agent actions may already have executed. x-sse-events maps each event name to its data schema. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2201,10 +2225,10 @@ export interface operations {
                 content: {
                     /**
                      * @example event: request_started
-                     *     data: {"request_id":"abc12345","session_id":"demo"}
+                     *     data: {"execution_id":"abc12345","session_id":"demo"}
                      *
                      *     event: final_response
-                     *     data: {"status":"failed","response":null,"message":"","problem":{"code":"internal_error","stage":"request","message":"요청을 완료하지 못했습니다.","next_action":"none"},"request_id":"abc12345","missing_slots":[],"trace":"Request ID: abc12345","debug":null,"upload_manifest":null}
+                     *     data: {"status":"failed","response":null,"message":"","problem":{"code":"internal_error","stage":"request","message":"요청을 완료하지 못했습니다.","next_action":"none"},"execution_id":"abc12345","missing_slots":[],"trace":"Execution ID: abc12345","debug":null,"upload_manifest":null}
                      *
                      *     event: done
                      *     data: {}

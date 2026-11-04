@@ -194,267 +194,6 @@
         "title": "ActionResults",
         "type": "object"
       },
-      "AgentDebugInfo": {
-        "properties": {
-          "action_results": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ActionResults"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "answer_provenance": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AnswerProvenance"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "error_codes": {
-            "items": {
-              "enum": [
-                "provider_schema_invalid",
-                "provider_configuration",
-                "provider_unavailable",
-                "provider_rate_limited",
-                "model_output_invalid",
-                "model_output_incomplete",
-                "model_refusal",
-                "internal_error",
-                "evidence_insufficient",
-                "call_budget_exhausted",
-                "request_timeout",
-                "answer_validation_failed",
-                "upload_revision_conflict",
-                "save_failed",
-                "PLANNER_SCHEMA_INVALID",
-                "PLANNER_TIMEOUT",
-                "RETRIEVAL_DOCS_TIMEOUT",
-                "RETRIEVAL_DOCS_FAILED",
-                "RAG_INDEX_MISSING",
-                "LOCAL_RAG_FAILED",
-                "UPLOAD_RETRIEVER_BUILD_FAILED",
-                "LLM_STRUCTURED_EMPTY",
-                "SYNTHESIS_TIMEOUT",
-                "VALIDATION_UNRESOLVED_REFERENCES",
-                "VALIDATION_MISSING_CONTENT",
-                "DEBUG_NORMALIZATION_FAILED",
-                "SLACK_RECIPIENT_MISSING",
-                "SLACK_RECIPIENT_INVALID",
-                "SLACK_RECIPIENT_AMBIGUOUS",
-                "SLACK_RECIPIENT_CONFLICT",
-                "SLACK_CONFIGURATION_ERROR",
-                "SLACK_TARGET_NOT_FOUND",
-                "SLACK_TARGET_UNAVAILABLE",
-                "SLACK_PERMISSION_DENIED",
-                "SLACK_AUTHENTICATION_FAILED",
-                "SLACK_RATE_LIMITED",
-                "SLACK_TEMPORARY_FAILURE",
-                "SLACK_DELIVERY_UNKNOWN",
-                "SLACK_PROTOCOL_ERROR",
-                "UPLOAD_PATH_INVALID"
-              ],
-              "type": "string"
-            },
-            "title": "Error Codes",
-            "type": "array"
-          },
-          "errors": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Errors",
-            "type": "array"
-          },
-          "execution_evidence": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ToolExecutionEvidence"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "latency_breakdown": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/LatencyBreakdownModel"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "latency_ms_server": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Latency Ms Server"
-          },
-          "llm_calls": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/components/schemas/LLMCallRecord"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Llm Calls"
-          },
-          "llm_diagnostics": {
-            "items": {
-              "$ref": "#/components/schemas/LLMDiagnostic"
-            },
-            "title": "Llm Diagnostics",
-            "type": "array"
-          },
-          "memory_compactions": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "title": "Memory Compactions",
-            "type": "array"
-          },
-          "missing_required_debug_fields": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Missing Required Debug Fields",
-            "type": "array"
-          },
-          "observability_status": {
-            "enum": [
-              "ok",
-              "degraded",
-              "failed"
-            ],
-            "title": "Observability Status",
-            "type": "string"
-          },
-          "observed_hits": {
-            "items": {
-              "$ref": "#/components/schemas/SearchHit"
-            },
-            "title": "Observed Hits",
-            "type": "array"
-          },
-          "planner_diagnostics": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PlannerDiagnostic"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "planner_errors": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Planner Errors",
-            "type": "array"
-          },
-          "retrieval_diagnostics": {
-            "items": {
-              "$ref": "#/components/schemas/RetrievalDiagnostic"
-            },
-            "title": "Retrieval Diagnostics",
-            "type": "array"
-          },
-          "retry_context": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/RetryState"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "route_decisions": {
-            "items": {
-              "$ref": "#/components/schemas/RoutingDecision"
-            },
-            "title": "Route Decisions",
-            "type": "array"
-          },
-          "schema_version": {
-            "title": "Schema Version",
-            "type": "integer"
-          },
-          "tool_call_count": {
-            "default": 0,
-            "title": "Tool Call Count",
-            "type": "integer"
-          },
-          "tool_calls": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Tool Calls",
-            "type": "array"
-          },
-          "validation_events": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Validation Events",
-            "type": "array"
-          }
-        },
-        "required": [
-          "schema_version",
-          "observability_status",
-          "missing_required_debug_fields",
-          "tool_calls",
-          "tool_call_count",
-          "execution_evidence",
-          "latency_ms_server",
-          "latency_breakdown",
-          "llm_calls",
-          "llm_diagnostics",
-          "errors",
-          "error_codes",
-          "validation_events",
-          "route_decisions",
-          "memory_compactions",
-          "planner_errors",
-          "observed_hits",
-          "answer_provenance",
-          "retry_context",
-          "retrieval_diagnostics",
-          "planner_diagnostics",
-          "action_results"
-        ],
-        "title": "AgentDebugInfo",
-        "type": "object"
-      },
       "AgentRequest": {
         "additionalProperties": false,
         "properties": {
@@ -514,13 +253,19 @@
           "debug": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/AgentDebugInfo"
+                "$ref": "#/components/schemas/DebugPayload"
               },
               {
                 "type": "null"
               }
             ],
             "default": null
+          },
+          "execution_id": {
+            "default": "",
+            "description": "ID of this execution, not the domain request ID.",
+            "title": "Execution Id",
+            "type": "string"
           },
           "message": {
             "default": "",
@@ -545,16 +290,10 @@
             ],
             "default": null
           },
-          "request_id": {
-            "default": "",
-            "description": "ID of this execution, not the domain request ID.",
-            "title": "Request Id",
-            "type": "string"
-          },
           "response": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/AnswerResponse"
+                "$ref": "#/components/schemas/SourcedAnswerPayload"
               },
               {
                 "type": "null"
@@ -597,7 +336,7 @@
           "answer_id",
           "message",
           "problem",
-          "request_id",
+          "execution_id",
           "missing_slots",
           "upload_manifest",
           "trace",
@@ -651,25 +390,25 @@
       },
       "AnswerExportResult": {
         "additionalProperties": false,
-        "description": "A saved answer retains its body even when the filesystem operation fails.",
+        "description": "An export reports its receipt while the displayed answer retains its body.",
         "properties": {
           "answer_id": {
             "minLength": 1,
             "title": "Answer Id",
             "type": "string"
           },
+          "execution_id": {
+            "description": "ID of this export execution, renewed on retry.",
+            "minLength": 1,
+            "title": "Execution Id",
+            "type": "string"
+          },
           "message": {
             "title": "Message",
             "type": "string"
           },
-          "request_id": {
-            "description": "ID of this export execution, renewed on retry.",
-            "minLength": 1,
-            "title": "Request Id",
-            "type": "string"
-          },
-          "response": {
-            "$ref": "#/components/schemas/AnswerResponse"
+          "receipt": {
+            "$ref": "#/components/schemas/ActionReceipt"
           },
           "status": {
             "enum": [
@@ -683,8 +422,8 @@
         "required": [
           "status",
           "answer_id",
-          "request_id",
-          "response",
+          "execution_id",
+          "receipt",
           "message"
         ],
         "title": "AnswerExportResult",
@@ -788,75 +527,6 @@
           "evidence_packet"
         ],
         "title": "AnswerProvenance",
-        "type": "object"
-      },
-      "AnswerResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "actions": {
-            "items": {
-              "$ref": "#/components/schemas/ActionReceipt"
-            },
-            "title": "Actions",
-            "type": "array"
-          },
-          "checks": {
-            "items": {
-              "$ref": "#/components/schemas/UnitCheck"
-            },
-            "title": "Checks",
-            "type": "array"
-          },
-          "citations": {
-            "items": {
-              "$ref": "#/components/schemas/Citation"
-            },
-            "title": "Citations",
-            "type": "array"
-          },
-          "content": {
-            "$ref": "#/components/schemas/AnswerDocument"
-          },
-          "content_hash": {
-            "default": "",
-            "title": "Content Hash",
-            "type": "string"
-          },
-          "issues": {
-            "items": {
-              "$ref": "#/components/schemas/ResponseIssue"
-            },
-            "title": "Issues",
-            "type": "array"
-          },
-          "retrieval_required": {
-            "default": false,
-            "title": "Retrieval Required",
-            "type": "boolean"
-          },
-          "semantic_validation": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/SemanticValidation"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "required": [
-          "content",
-          "citations",
-          "checks",
-          "issues",
-          "actions",
-          "content_hash",
-          "retrieval_required",
-          "semantic_validation"
-        ],
-        "title": "AnswerResponse",
         "type": "object"
       },
       "AnswerSource": {
@@ -997,23 +667,21 @@
         "title": "BrowserUploadSyncRequest",
         "type": "object"
       },
-      "Citation": {
+      "CapturedAnswerSource": {
         "additionalProperties": false,
         "properties": {
-          "evidence": {
-            "$ref": "#/components/schemas/EvidenceRef"
+          "element": {
+            "$ref": "#/components/schemas/DocumentElement"
           },
-          "number": {
-            "minimum": 1,
-            "title": "Number",
-            "type": "integer"
+          "snapshot": {
+            "$ref": "#/components/schemas/DocumentSnapshot"
           }
         },
         "required": [
-          "number",
-          "evidence"
+          "snapshot",
+          "element"
         ],
-        "title": "Citation",
+        "title": "CapturedAnswerSource",
         "type": "object"
       },
       "ClientConfig": {
@@ -1168,7 +836,8 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "description": "Location-only content. When generating this unit, set text exactly to '<source_location>'; put source quotations and explanations in separate units with source_location=null. The server replaces only that placeholder with the verified location. Stored responses retain the rendered text."
           },
           "text": {
             "minLength": 1,
@@ -1184,6 +853,270 @@
           "sentence_scope"
         ],
         "title": "ContentUnit",
+        "type": "object"
+      },
+      "DebugPayload": {
+        "description": "Completed observations shared by runtime, HTTP, and evaluation.",
+        "properties": {
+          "action_results": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActionResults"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "answer_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnswerProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "error_codes": {
+            "items": {
+              "enum": [
+                "provider_schema_invalid",
+                "provider_configuration",
+                "provider_unavailable",
+                "provider_rate_limited",
+                "model_output_invalid",
+                "model_output_incomplete",
+                "model_refusal",
+                "internal_error",
+                "evidence_insufficient",
+                "call_budget_exhausted",
+                "request_timeout",
+                "answer_validation_failed",
+                "upload_revision_conflict",
+                "save_failed",
+                "PLANNER_SCHEMA_INVALID",
+                "PLANNER_TIMEOUT",
+                "RETRIEVAL_DOCS_TIMEOUT",
+                "RETRIEVAL_DOCS_FAILED",
+                "RAG_INDEX_MISSING",
+                "LOCAL_RAG_FAILED",
+                "UPLOAD_RETRIEVER_BUILD_FAILED",
+                "LLM_STRUCTURED_EMPTY",
+                "SYNTHESIS_TIMEOUT",
+                "VALIDATION_UNRESOLVED_REFERENCES",
+                "VALIDATION_MISSING_CONTENT",
+                "DEBUG_NORMALIZATION_FAILED",
+                "SLACK_RECIPIENT_MISSING",
+                "SLACK_RECIPIENT_INVALID",
+                "SLACK_RECIPIENT_AMBIGUOUS",
+                "SLACK_RECIPIENT_CONFLICT",
+                "SLACK_CONFIGURATION_ERROR",
+                "SLACK_TARGET_NOT_FOUND",
+                "SLACK_TARGET_UNAVAILABLE",
+                "SLACK_PERMISSION_DENIED",
+                "SLACK_AUTHENTICATION_FAILED",
+                "SLACK_RATE_LIMITED",
+                "SLACK_TEMPORARY_FAILURE",
+                "SLACK_DELIVERY_UNKNOWN",
+                "SLACK_PROTOCOL_ERROR",
+                "UPLOAD_PATH_INVALID"
+              ],
+              "type": "string"
+            },
+            "title": "Error Codes",
+            "type": "array"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "execution_evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ToolExecutionEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "latency_breakdown": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LatencyBreakdownModel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "latency_ms_server": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Latency Ms Server"
+          },
+          "llm_calls": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LLMCallRecord"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Llm Calls"
+          },
+          "llm_diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/LLMDiagnostic"
+            },
+            "title": "Llm Diagnostics",
+            "type": "array"
+          },
+          "memory_compactions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Memory Compactions",
+            "type": "array"
+          },
+          "missing_required_debug_fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Required Debug Fields",
+            "type": "array"
+          },
+          "observability_status": {
+            "default": "ok",
+            "enum": [
+              "ok",
+              "degraded",
+              "failed"
+            ],
+            "title": "Observability Status",
+            "type": "string"
+          },
+          "observed_hits": {
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            },
+            "title": "Observed Hits",
+            "type": "array"
+          },
+          "planner_diagnostics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlannerDiagnostic"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "planner_errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Planner Errors",
+            "type": "array"
+          },
+          "retrieval_diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/RetrievalDiagnostic"
+            },
+            "title": "Retrieval Diagnostics",
+            "type": "array"
+          },
+          "retry_context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RetryState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "route_decisions": {
+            "items": {
+              "$ref": "#/components/schemas/RoutingDecision"
+            },
+            "title": "Route Decisions",
+            "type": "array"
+          },
+          "schema_version": {
+            "default": 14,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "tool_call_count": {
+            "default": 0,
+            "title": "Tool Call Count",
+            "type": "integer"
+          },
+          "tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tool Calls",
+            "type": "array"
+          },
+          "validation_events": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Validation Events",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "observability_status",
+          "missing_required_debug_fields",
+          "tool_calls",
+          "tool_call_count",
+          "execution_evidence",
+          "llm_calls",
+          "errors",
+          "error_codes",
+          "validation_events",
+          "memory_compactions",
+          "planner_errors",
+          "observed_hits",
+          "answer_provenance",
+          "retry_context",
+          "retrieval_diagnostics",
+          "planner_diagnostics",
+          "latency_breakdown",
+          "action_results",
+          "latency_ms_server",
+          "llm_diagnostics",
+          "route_decisions"
+        ],
+        "title": "DebugPayload",
         "type": "object"
       },
       "DocsSearchProviderRequest": {
@@ -2142,7 +2075,7 @@
         "description": "An independently planned subject has one match mode, never mixed symbol roles.",
         "properties": {
           "aspects": {
-            "description": "Literal parameter names, option/flag names, requested value tokens or code fragments that must appear in returned source, such as axis, --force, reflect or random_state. For docs setting-meaning questions, omit ordinary data and arbitrary counts, capacities, sizes, thresholds or seeds; keep their parameter names here and complete settings in query and the body request. A value changing the result is not sufficient to make it a literal anchor. Keep categorical modes, enum members, sentinels and distinct behavior-branch values separately alongside their parameter names, including numeric or Boolean choices. Preserve an explicitly requested exact source/code match. Source locations (lines/ranges, cells, pages or document regions) belong in query and the body request, not aspects, unless explicitly requested as literal strings occurring in source. Classify by the requested role, even when location labels are quoted. Do not repeat the primary API already in symbols. For upload and docs, never put natural-language properties or conditions here; preserve their meaning in query. For docs additionally request the relevant evidence_needs. Only anchors explicitly requested in the user's dialogue belong here; never guess an identifier from the user's description of a property.",
+            "description": "Literal parameter names, option/flag names, requested value tokens or code fragments that must appear in returned source, such as axis, --force, reflect or random_state. For both docs and upload, aspects add source-content restrictions beyond identifying the API in symbols. Questions about a call's ownership or surrounding assignments and match/case binding belong in query and the body; they do not require those terms inside the selected call. Naming an API, requiring its actual library identity, or asking to quote its source unchanged does not require that API spelling in source. A verified import alias still qualifies. Repeat a symbol here only when the user independently requires its exact spelling and would exclude aliases; retain both fields in that case. For docs setting-meaning questions, omit ordinary data and arbitrary counts, capacities, sizes, thresholds or seeds; keep their parameter names here and complete settings in query and the body request. A value changing the result is not sufficient to make it a literal anchor. Keep categorical modes, enum members, sentinels and distinct behavior-branch values separately alongside their parameter names, including numeric or Boolean choices. Preserve an explicitly requested exact source/code match. Source locations (lines/ranges, cells, pages or document regions) belong in query and the body request, not aspects, unless explicitly requested as literal strings occurring in source. Classify by the requested role, even when location labels are quoted. For upload and docs, never put natural-language properties or conditions here; preserve their meaning in query. For docs additionally request the relevant evidence_needs. Only anchors explicitly requested in the user's dialogue belong here; never guess an identifier from the user's description of a property.",
             "items": {
               "type": "string"
             },
@@ -2214,7 +2147,7 @@
             "type": "string"
           },
           "symbols": {
-            "description": "At most one primary target. Use separate tasks for independent symbols, including each uploaded variable/constant whose value is requested. Never put a second independent variable in the first variable's aspects: symbol retrieval selects only the primary target's occurrences. Calls inspected inside a function belong in its aspects, not additional definitions.",
+            "description": "At most one primary target. Use a fully qualified API name when selecting calls to that API. To investigate whether an uploaded call belongs to that API, use the observed call's written name instead; do not assume the answer by canonicalizing its owner. Preserve ownership and surrounding binding questions in query and the body, not as additional literal aspects. Use separate tasks for independent symbols, including each uploaded variable/constant whose value is requested. Never put a second independent variable in the first variable's aspects: symbol retrieval selects only the primary target's occurrences. Calls inspected inside a function belong in its aspects, not additional definitions.",
             "items": {
               "type": "string"
             },
@@ -3314,15 +3247,33 @@
             "title": "Requirement Id",
             "type": "string"
           },
+          "role": {
+            "default": "candidate",
+            "enum": [
+              "candidate",
+              "context"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
           "score": {
             "$ref": "#/components/schemas/RetrievalScore"
+          },
+          "supporting_evidence_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supporting Evidence Ids",
+            "type": "array"
           }
         },
         "required": [
           "evidence",
           "score",
           "rank",
-          "requirement_id"
+          "requirement_id",
+          "role",
+          "supporting_evidence_ids"
         ],
         "title": "SearchHit",
         "type": "object"
@@ -3948,6 +3899,37 @@
         "title": "SourceAnchor",
         "type": "object"
       },
+      "SourceCitation": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_id": {
+            "minLength": 1,
+            "title": "Evidence Id",
+            "type": "string"
+          },
+          "number": {
+            "minimum": 1,
+            "title": "Number",
+            "type": "integer"
+          },
+          "selection": {
+            "$ref": "#/components/schemas/SourceSelection"
+          },
+          "source_id": {
+            "minLength": 1,
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "number",
+          "evidence_id",
+          "source_id",
+          "selection"
+        ],
+        "title": "SourceCitation",
+        "type": "object"
+      },
       "SourceLocationReference": {
         "additionalProperties": false,
         "description": "A nonempty element-character range inside one supplied evidence selection.",
@@ -4013,6 +3995,80 @@
           "cell_ids"
         ],
         "title": "SourceSelection",
+        "type": "object"
+      },
+      "SourcedAnswerPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/ActionReceipt"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/UnitCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/SourceCitation"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "content": {
+            "$ref": "#/components/schemas/AnswerDocument"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/ResponseIssue"
+            },
+            "title": "Issues",
+            "type": "array"
+          },
+          "retrieval_required": {
+            "title": "Retrieval Required",
+            "type": "boolean"
+          },
+          "semantic_validation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SemanticValidation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sources": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CapturedAnswerSource"
+            },
+            "title": "Sources",
+            "type": "object"
+          }
+        },
+        "required": [
+          "content",
+          "sources",
+          "citations",
+          "checks",
+          "issues",
+          "actions",
+          "content_hash",
+          "retrieval_required",
+          "semantic_validation"
+        ],
+        "title": "SourcedAnswerPayload",
         "type": "object"
       },
       "StageAttemptModel": {
@@ -4182,8 +4238,7 @@
               "compact_structured_fallback",
               "plain_summary_attach_fallback",
               "korean_template_summary_fallback",
-              "deterministic_grounded_fallback",
-              "deterministic_grounded_direct"
+              "deterministic_grounded_fallback"
             ],
             "title": "Mode",
             "type": "string"
@@ -4491,10 +4546,10 @@
             "title": "Events",
             "type": "array"
           },
-          "request_id": {
-            "description": "ID of this execution, matching TurnResult.request_id; not the domain request ID.",
+          "execution_id": {
+            "description": "ID of this execution, matching TurnResult.execution_id; not the domain request ID.",
             "minLength": 1,
-            "title": "Request Id",
+            "title": "Execution Id",
             "type": "string"
           },
           "schema_version": {
@@ -4514,7 +4569,7 @@
         },
         "required": [
           "schema_version",
-          "request_id",
+          "execution_id",
           "status",
           "events"
         ],
@@ -4910,7 +4965,7 @@
           "200": {
             "content": {
               "text/event-stream": {
-                "example": "event: request_started\ndata: {\"request_id\":\"abc12345\",\"session_id\":\"demo\"}\n\nevent: final_response\ndata: {\"status\":\"failed\",\"response\":null,\"message\":\"\",\"problem\":{\"code\":\"internal_error\",\"stage\":\"request\",\"message\":\"요청을 완료하지 못했습니다.\",\"next_action\":\"none\"},\"request_id\":\"abc12345\",\"missing_slots\":[],\"trace\":\"Request ID: abc12345\",\"debug\":null,\"upload_manifest\":null}\n\nevent: done\ndata: {}\n\n",
+                "example": "event: request_started\ndata: {\"execution_id\":\"abc12345\",\"session_id\":\"demo\"}\n\nevent: final_response\ndata: {\"status\":\"failed\",\"response\":null,\"message\":\"\",\"problem\":{\"code\":\"internal_error\",\"stage\":\"request\",\"message\":\"요청을 완료하지 못했습니다.\",\"next_action\":\"none\"},\"execution_id\":\"abc12345\",\"missing_slots\":[],\"trace\":\"Execution ID: abc12345\",\"debug\":null,\"upload_manifest\":null}\n\nevent: done\ndata: {}\n\n",
                 "schema": {
                   "type": "string"
                 },
@@ -4951,12 +5006,12 @@
                       "elapsed_ms": {
                         "type": "integer"
                       },
-                      "request_id": {
+                      "execution_id": {
                         "type": "string"
                       }
                     },
                     "required": [
-                      "request_id",
+                      "execution_id",
                       "elapsed_ms"
                     ],
                     "type": "object"
@@ -4988,7 +5043,7 @@
                   },
                   "request_started": {
                     "properties": {
-                      "request_id": {
+                      "execution_id": {
                         "type": "string"
                       },
                       "session_id": {
@@ -4996,7 +5051,7 @@
                       }
                     },
                     "required": [
-                      "request_id",
+                      "execution_id",
                       "session_id"
                     ],
                     "type": "object"
@@ -5060,7 +5115,7 @@
                 }
               }
             },
-            "description": "UTF-8 SSE frames: event: <name>\\ndata: <JSON object>\\n\\n. Each execution ends with one final_response carrying status, response, problem, message, request_id, trace, debug and upload_manifest. Status distinguishes completed, needs_input, failed, partial and refused; a failed result has no answer document. The manifest is captured under the session lock; null on failure means unknown state, not an empty attachment set. HTTP 200 and done alone do not indicate success. Clients must not automatically resubmit interrupted requests because agent actions may already have executed. x-sse-events maps each event name to its data schema."
+            "description": "UTF-8 SSE frames: event: <name>\\ndata: <JSON object>\\n\\n. Each execution ends with one final_response carrying status, response, problem, message, execution_id, trace, debug and upload_manifest. Status distinguishes completed, needs_input, failed, partial and refused; a failed result has no answer document. The manifest is captured under the session lock; null on failure means unknown state, not an empty attachment set. HTTP 200 and done alone do not indicate success. Clients must not automatically resubmit interrupted requests because agent actions may already have executed. x-sse-events maps each event name to its data schema."
           },
           "422": {
             "content": {

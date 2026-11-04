@@ -22,7 +22,7 @@ export function AnswerDelivery({ client, answerId, response, currentExport, onEx
   const [localError, setLocalError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-  const receipt = (currentExport?.response ?? response).actions.find((action) => action.kind === 'save_text');
+  const receipt = currentExport?.receipt ?? response.actions.find((action) => action.kind === 'save_text');
   const artifact = receipt?.artifact;
   const expiresAt = artifact ? artifact.expires_at * 1000 : null;
   const expired = expiresAt !== null && expiresAt <= now;

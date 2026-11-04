@@ -39,6 +39,7 @@ const response: AnswerResponse = {
     ],
   },
   citations: [],
+  sources: {},
   checks: [
     'b0.content', 'b1.content.0', 'b1.content.1', 'b2.items.0', 'b2.items.1', 'b3.content',
     'b4.content', 'b5.columns.0', 'b5.columns.1', 'b5.rows.0.0', 'b5.rows.0.1', 'b6.content.0',
@@ -165,11 +166,9 @@ describe('AnswerView', () => {
   it('opens all connected sections from the answer source button and omits unused sources', async () => {
     const user = userEvent.setup();
     const sectioned = structuredClone(sourceFixtures.sectioned) as AnswerResponse;
-    sectioned.citations.push({ ...sectioned.citations[0], number: 2, evidence: {
-      ...sectioned.citations[0].evidence, id: 'unused-source', snapshot: {
-        ...sectioned.citations[0].evidence.snapshot, title: '사용하지 않은 출처',
-      },
-    } });
+    const source = sectioned.sources[sectioned.citations[0].source_id];
+    sectioned.sources.unused = { ...source, snapshot: { ...source.snapshot, title: '사용하지 않은 출처' } };
+    sectioned.citations.push({ ...sectioned.citations[0], number: 2, evidence_id: 'unused-evidence', source_id: 'unused' });
     render(<AnswerView response={sectioned} />);
     expect(screen.queryByRole('button', { name: '근거 [2] 사용하지 않은 출처' })).not.toBeInTheDocument();
     const opener = screen.getByRole('button', { name: '근거 [1] 같은 출처' });
@@ -181,6 +180,39 @@ describe('AnswerView', () => {
     expect(within(panel).getByText('마지막 설명')).toBeVisible();
     await user.keyboard('{Escape}');
     expect(opener).toHaveFocus();
+  });
+
+  it('opens each selected range from one shared captured source without changing the answer', async () => {
+    const user = userEvent.setup();
+    const fixture = sourceFixtures.sectioned as AnswerResponse;
+    const captured = fixture.sources[fixture.citations[0].source_id];
+    const shared: AnswerResponse = {
+      ...response,
+      content: { blocks: [{ type: 'paragraph', content: [
+        { ...unit('첫 부분'), basis: 'source', refs: ['ref:first'] },
+        { ...unit('둘째 부분'), basis: 'source', refs: ['ref:second'] },
+      ] }] },
+      sources: { shared: { ...captured, element: { ...captured.element, text: 'alpha\nbeta' } } },
+      citations: [
+        { number: 1, evidence_id: 'ref:first', source_id: 'shared', selection: { start: 0, end: 5, cell_ids: [] } },
+        { number: 2, evidence_id: 'ref:second', source_id: 'shared', selection: { start: 6, end: 10, cell_ids: [] } },
+      ],
+    };
+    const original = JSON.stringify(shared);
+    render(<AnswerView response={shared} />);
+
+    await user.click(screen.getByRole('button', { name: '근거 [1] 열기' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '발췌 복사' }));
+    expect(await navigator.clipboard.readText()).toBe('alpha');
+    await user.keyboard('{Escape}');
+    await user.click(screen.getByRole('button', { name: '근거 [2] 열기' }));
+    const panel = screen.getByRole('dialog');
+    await user.click(within(panel).getByRole('button', { name: '발췌 복사' }));
+    expect(await navigator.clipboard.readText()).toBe('beta');
+    await user.click(within(panel).getByText('수집한 원문 그대로 보기'));
+    await user.click(within(panel).getByRole('button', { name: '보관 원문 복사' }));
+    expect(await navigator.clipboard.readText()).toBe('alpha\nbeta');
+    expect(JSON.stringify(shared)).toBe(original);
   });
 
   it('keeps sentence scopes as metadata without changing prose or citation context', async () => {
@@ -206,14 +238,14 @@ describe('AnswerView', () => {
   it('distinguishes source connections, exact excerpts, and semantic evaluation', async () => {
     const user = userEvent.setup();
     render(<AnswerView response={sourceFixtures.quote as AnswerResponse}
-      actions={<button type="button">TXT 파일 만들기</button>} requestId="request-info" />);
+      actions={<button type="button">TXT 파일 만들기</button>} executionId="execution-info" />);
 
     expect(screen.getByRole('button', { name: 'TXT 파일 만들기' }).closest('.answer-toolbar')).not.toBeNull();
     expect(screen.getByText('출처가 연결된 내용 1개 · 원문 발췌 1개 중 원문 일치 1개')).not.toBeVisible();
-    expect(screen.getByText('요청 ID: request-info')).not.toBeVisible();
+    expect(screen.getByText('실행 ID: execution-info')).not.toBeVisible();
     await user.click(screen.getByText('답변 정보'));
     expect(screen.getByText('출처가 연결된 내용 1개 · 원문 발췌 1개 중 원문 일치 1개')).toBeVisible();
-    expect(screen.getByText('요청 ID: request-info')).toBeVisible();
+    expect(screen.getByText('실행 ID: execution-info')).toBeVisible();
     expect(screen.getByText('자동 확인은 답변 전체의 정확도나 실행 성공을 보증하지 않습니다.')).toBeVisible();
     await user.click(screen.getByText('기술 상세'));
     expect(screen.getByText('답변 본문 조건 충족: 검증 안 됨')).toBeVisible();
@@ -332,7 +364,7 @@ describe('AnswerView', () => {
     const turn: AgentResponse = {
       status: 'partial', response: partialResponse, answer_id: 'answer-partial', message: '',
       problem: { code: 'evidence_insufficient', stage: 'validation', message: '근거를 충분히 확인하지 못했습니다.', next_action: 'supply_information', retry_after_seconds: null },
-      request_id: 'request-partial', missing_slots: [], trace: '', debug: null, upload_manifest: { epoch: 'session', revision: 0, files: [] },
+      execution_id: 'execution-partial', missing_slots: [], trace: '', debug: null, upload_manifest: { epoch: 'session', revision: 0, files: [] },
     };
     render(<AnswerView response={partialResponse} turn={turn} />);
 
@@ -343,7 +375,7 @@ describe('AnswerView', () => {
     expect(within(summary).queryByText(/자료를 추가/)).not.toBeInTheDocument();
     await user.click(screen.getByText('답변의 한계와 처리 정보'));
     expect(screen.getByText('근거를 충분히 확인하지 못했습니다.')).toBeVisible();
-    expect(screen.getByText('오류 식별자: request-partial')).toBeVisible();
+    expect(screen.getByText('오류 식별자: execution-partial')).toBeVisible();
     await user.click(screen.getByText('이 내용의 한계 (1개)'));
     expect(screen.getByText('이 문장의 추가 조건은 확인하지 못했습니다.')).toBeVisible();
   });
@@ -360,7 +392,7 @@ describe('AnswerView', () => {
     const turn: AgentResponse = {
       status: 'partial', response: checked, answer_id: 'saved-answer', message: '',
       problem: { code: 'save_failed', stage: 'action_postprocess', message: '파일을 만들지 못했습니다.', next_action: 'retry_later', retry_after_seconds: null },
-      request_id: 'save-request', missing_slots: [], trace: '', debug: null, upload_manifest: { epoch: 'session', revision: 0, files: [] },
+      execution_id: 'save-execution', missing_slots: [], trace: '', debug: null, upload_manifest: { epoch: 'session', revision: 0, files: [] },
     };
     render(<AnswerView response={checked} turn={turn} />);
 

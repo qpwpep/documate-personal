@@ -5,7 +5,7 @@ import { MarkdownView } from './MarkdownView';
 import { formatAnchor, selectedSourceAnchors, sourceExcerpt, sourceLineRecords, sourceLocationLabel } from './sourceLocations';
 import './evidence.css';
 
-type Citation = components['schemas']['Citation'];
+type Citation = components['schemas']['SourceCitation'];
 type TableData = components['schemas']['TableData'];
 export type AnswerContext = { text: string; isCode?: boolean; inline?: boolean };
 
@@ -18,8 +18,9 @@ const RELATED_PREVIEW_PARAGRAPHS = 3;
 const FALLBACK_PREVIEW_LINES = 6;
 const FALLBACK_PREVIEW_CHARACTERS = 420;
 
-export function EvidencePanel({ citation, context = [], opener, onClose }: {
+export function EvidencePanel({ citation, source, context = [], opener, onClose }: {
   citation: Citation;
+  source: components['schemas']['CapturedAnswerSource'];
   context?: readonly AnswerContext[];
   opener: HTMLElement;
   onClose: () => void;
@@ -30,8 +31,8 @@ export function EvidencePanel({ citation, context = [], opener, onClose }: {
   const searchId = useId();
   const [query, setQuery] = useState('');
   const [copyStatus, setCopyStatus] = useState({ excerpt: '', source: '' });
-  const { evidence } = citation;
-  const { element, snapshot } = evidence;
+  const { element, snapshot } = source;
+  const evidence = { element, selection: citation.selection };
   const excerpt = sourceExcerpt(evidence);
   const sourceLines = sourceLineRecords(evidence);
   const sourceContexts = context.filter((item) => item.text.trim());

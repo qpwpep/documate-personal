@@ -62,12 +62,17 @@ export function parseAgentResponse(value: unknown): AgentResponse {
     || (!['failed', 'refused'].includes(response.status) && response.upload_manifest === null)) {
     throw invalidResponse();
   }
-  if (response.response !== null) validateActionReceipts(response.response);
+  if (response.response !== null) {
+    for (const citation of response.response.citations) {
+      if (!Object.hasOwn(response.response.sources, citation.source_id)) throw invalidResponse();
+    }
+    validateActionReceipts(response.response.actions);
+  }
   return response;
 }
 
-export function validateActionReceipts(response: AnswerResponse): void {
-  for (const receipt of response.actions) {
+export function validateActionReceipts(receipts: readonly AnswerResponse['actions'][number][]): void {
+  for (const receipt of receipts) {
     const slack = receipt.slack;
     const previousSlack = receipt.previous_slack;
     if (slack !== null) validateSlackDelivery(slack);

@@ -15,7 +15,7 @@ function completedTurn(): ChatTurn {
   const result = parseAgentResponse(fixtures.responses.completed);
   return {
     id: 'turn-completed', query: '  질문 원문\r\n둘째 줄  ', result,
-    notices: ['앞선 수신 안내'], error: null, requestId: result.request_id,
+    notices: ['앞선 수신 안내'], error: null, executionId: result.execution_id,
     interrupted: false, receiving: false, exportResult: null, exportError: null,
   };
 }
@@ -122,7 +122,7 @@ describe('브라우저 대화 표시 상태', () => {
     const turn = completedTurn();
     turn.result = parseAgentResponse({ ...fixtures.responses.completed, response: sourceFixtures.quote });
     turn.exportResult = parseAnswerExport({
-      status: 'failed', answer_id: turn.result.answer_id, request_id: 'save-attempt',
+      status: 'failed', answer_id: turn.result.answer_id, execution_id: 'save-attempt',
       message: '파일을 저장하지 못했습니다.',
       response: {
         ...turn.result.response,

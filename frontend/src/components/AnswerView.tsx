@@ -10,7 +10,7 @@ import './answer.css';
 
 type AnswerBlock = AnswerResponse['content']['blocks'][number];
 type ContentUnit = components['schemas']['ContentUnit'];
-type Citation = components['schemas']['Citation'];
+type Citation = components['schemas']['SourceCitation'];
 type Problem = components['schemas']['ExecutionProblem'];
 type Unit = { path: string; unit: ContentUnit; isCode?: boolean; inline?: boolean };
 type OpenCitation = (citation: Citation, opener: HTMLElement) => void;
@@ -26,12 +26,12 @@ const deliveryGuidance = {
   verify_delivery: 'Slack에서 전달 여부를 확인해 주세요. 자동으로 다시 전송하지 않습니다.',
 };
 
-export function AnswerView({ response, turn, actions, requestId }: {
-  response: AnswerResponse; turn?: AgentResponse; actions?: ReactNode; requestId?: string | null;
+export function AnswerView({ response, turn, actions, executionId }: {
+  response: AnswerResponse; turn?: AgentResponse; actions?: ReactNode; executionId?: string | null;
 }) {
   const answerId = useId();
   const [opened, setOpened] = useState<{ citation: Citation; context: AnswerContext[]; opener: HTMLElement } | null>(null);
-  const citations = new Map(response.citations.map((citation) => [citation.evidence.id, citation]));
+  const citations = new Map(response.citations.map((citation) => [citation.evidence_id, citation]));
   const units = response.content.blocks.flatMap((block, index) => blockUnits(block, index));
   const usedRefs = [...new Set(units.flatMap(({ unit }) => unit.refs))];
   const limits = validationLimits(response);
@@ -50,7 +50,7 @@ export function AnswerView({ response, turn, actions, requestId }: {
 
   function openCitation(citation: Citation, opener: HTMLElement, contextUnits: Unit[]) {
     setOpened({ citation, opener,
-      context: contextUnits.filter(({ unit }) => unit.refs.includes(citation.evidence.id))
+      context: contextUnits.filter(({ unit }) => unit.refs.includes(citation.evidence_id))
         .map(({ unit, isCode, inline }) => ({ text: unit.text, isCode: isCode || unit.source_location != null, inline })),
     });
   }
@@ -104,7 +104,7 @@ export function AnswerView({ response, turn, actions, requestId }: {
         <details className="answer-limit-details">
           <summary>답변의 한계와 처리 정보</summary>
           {globalIssues.map((issue, index) => <p key={index}>{issue.message}</p>)}
-          {partialProblem && turn?.request_id && <p className="answer-caption">오류 식별자: {turn.request_id}</p>}
+          {partialProblem && turn?.execution_id && <p className="answer-caption">오류 식별자: {turn.execution_id}</p>}
         </details>
       )}
       {!partialProblem && limits.length > 0 && <div className="answer-validation-notices">
@@ -119,17 +119,18 @@ export function AnswerView({ response, turn, actions, requestId }: {
         {usedRefs.map((ref) => {
           const citation = citations.get(ref);
           if (!citation) return null;
-          const title = citation.evidence.snapshot.title || citation.evidence.snapshot.source_uri;
+          const source = response.sources[citation.source_id];
+          const title = source.snapshot.title || source.snapshot.source_uri;
           return <button type="button" className="answer-source" key={ref} aria-label={`근거 [${citation.number}] ${title}`}
             onClick={(event) => openCitation(citation, event.currentTarget, units)}>
             <small aria-hidden="true">{citation.number}</small><span>{title}</span>
           </button>;
         })}
         {actions}
-        <ValidationSummary response={response} units={units} limits={limits} incomplete={turn?.status === 'partial'} requestId={requestId} />
+        <ValidationSummary response={response} units={units} limits={limits} incomplete={turn?.status === 'partial'} executionId={executionId} />
       </div>
       <ActionReceipts response={response} />
-      {opened && <EvidencePanel {...opened} onClose={() => setOpened(null)} />}
+      {opened && <EvidencePanel {...opened} source={response.sources[opened.citation.source_id]} onClose={() => setOpened(null)} />}
     </div>
   );
 }
@@ -280,11 +281,11 @@ function validationLimits(response: AnswerResponse): string[] {
   return limits;
 }
 
-function ValidationSummary({ response, units, limits, incomplete, requestId }: {
-  response: AnswerResponse; units: Unit[]; limits: string[]; incomplete: boolean; requestId?: string | null;
+function ValidationSummary({ response, units, limits, incomplete, executionId }: {
+  response: AnswerResponse; units: Unit[]; limits: string[]; incomplete: boolean; executionId?: string | null;
 }) {
   const report = response.semantic_validation;
-  if (!response.citations.length && !report && !units.length && !requestId) return null;
+  if (!response.citations.length && !report && !units.length && !executionId) return null;
   const resolved = response.checks.filter((check) => check.reference_status === 'resolved').length;
   const excerpts = new Set(units.filter(({ unit }) => unit.basis === 'excerpt').map(({ path }) => path));
   const exact = response.checks.filter((check) => excerpts.has(check.unit_id) && check.support_status === 'exact_match').length;
@@ -293,7 +294,7 @@ function ValidationSummary({ response, units, limits, incomplete, requestId }: {
   const requestCheck = report?.checks.find((check) => check.name === 'request_fulfilled' && !check.unit_id);
   return <details className="answer-validation"><summary>답변 정보</summary>
     <p className="answer-caption">출처가 연결된 내용 {resolved}개{quoteSummary}</p>
-    {requestId && <p className="request-id">요청 ID: {requestId}</p>}
+    {executionId && <p className="request-id">실행 ID: {executionId}</p>}
       <p>{resolved ? `출처 연결: 내용 ${resolved}개에 출처가 연결되어 있습니다.` : '출처 연결: 이 답변에 연결된 출처가 없습니다.'}</p>
       <p>{excerpts.size ? `원문 발췌 ${excerpts.size}개 중 원문 일치 ${exact}개. 보관한 원문과 일치하는지 확인합니다.` : '원문 발췌: 자료에서 그대로 옮긴 내용은 없습니다.'}</p>
       {units.some(({ isCode }) => isCode) && <p>실행 확인: 코드 형식으로 표시된 내용의 실행 결과는 확인하지 않았습니다.</p>}

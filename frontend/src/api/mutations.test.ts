@@ -60,10 +60,10 @@ describe('explicit attachment and delivery operations', () => {
     const client = new AgentSessionClient({ sessionId: 'session-1', baseUrl });
     await client.refreshUploads();
     respond = (_request, response) => {
-      response.writeHead(409, { 'Content-Type': 'application/json', 'X-Request-ID': 'conflict-1' });
+      response.writeHead(409, { 'Content-Type': 'application/json', 'X-Execution-ID': 'conflict-1' });
       response.end(JSON.stringify({ detail: { code: 'UPLOAD_REVISION_CONFLICT', message: '첨부 목록이 변경되었습니다.', files: [] } }));
     };
-    await expect(client.syncUploads(syncRequest)).rejects.toMatchObject({ code: 'UPLOAD_REVISION_CONFLICT', status: 409, requestId: 'conflict-1' });
+    await expect(client.syncUploads(syncRequest)).rejects.toMatchObject({ code: 'UPLOAD_REVISION_CONFLICT', status: 409, executionId: 'conflict-1' });
     expect(client.manifest).toBeNull();
     expect(requests.filter(({ method }) => method === 'POST')).toHaveLength(1);
     const updated = { ...manifest, revision: 3 };
@@ -117,10 +117,10 @@ describe('explicit attachment and delivery operations', () => {
 
   it('retries only the selected answer ID and returns a failed save receipt without replaying chat', async () => {
     const result = {
-      status: 'failed', answer_id: 'old-answer', request_id: 'export-1', message: '저장에 실패했습니다.',
-      response: { ...fixtures.responses.completed.response, actions: [{ kind: 'save_text', status: 'error', error: 'write_failed',
+      status: 'failed', answer_id: 'old-answer', execution_id: 'export-1', message: '저장에 실패했습니다.',
+      receipt: { kind: 'save_text', status: 'error', error: 'write_failed',
         invocation_id: null, file_path: null, slack: null, previous_slack: null, message: null, operation: null, artifact: null,
-        verification: 'failed', error_code: 'write_failed' }] },
+        verification: 'failed', error_code: 'write_failed' },
     };
     respond = (_request, response) => {
       response.writeHead(200, { 'Content-Type': 'application/json' });

@@ -26,8 +26,8 @@ const receipt = {
   verification: 'verified', error_code: null,
 };
 const completed = {
-  status: 'completed', answer_id: 'answer-1', request_id: 'export-request-1', message: '저장했습니다.',
-  response: { ...fixtures.responses.completed.response, actions: [receipt] },
+  status: 'completed', answer_id: 'answer-1', execution_id: 'export-request-1', message: '저장했습니다.',
+  receipt,
 };
 
 const selectedRecipient = {
@@ -82,7 +82,7 @@ describe('answer export response', () => {
   it.each([null, 'unverifiable'])('rejects a legacy successful save with verification %s in a final response', (verification) => {
     const result = {
       ...fixtures.responses.completed,
-      response: { ...completed.response, actions: [{ ...receipt, verification, artifact: null, operation: null }] },
+      response: { ...fixtures.responses.completed.response, actions: [{ ...receipt, verification, artifact: null, operation: null }] },
     };
 
     expect(() => parseAgentResponse(result)).toThrowError(expect.objectContaining({ code: 'invalid_response' }));
@@ -90,16 +90,14 @@ describe('answer export response', () => {
 
   it('preserves the selected answer and its verified save identity', () => {
     expect(parseAnswerExport(completed, 'answer-1')).toEqual(completed);
+    expect(parseAnswerExport(completed, 'answer-1')).not.toHaveProperty('response');
   });
 
-  it('retains a failed save receipt and its original answer', () => {
+  it('retains a failed save receipt without repeating the original answer', () => {
     const failed = {
       ...completed,
       status: 'failed',
-      response: {
-        ...completed.response,
-        actions: [{ ...receipt, status: 'error', file_path: null, artifact: null, verification: 'failed', error: '저장 실패' }],
-      },
+      receipt: { ...receipt, status: 'error', file_path: null, artifact: null, verification: 'failed', error: '저장 실패' },
     };
     expect(parseAnswerExport(failed, 'answer-1')).toEqual(failed);
   });
@@ -109,15 +107,15 @@ describe('answer export response', () => {
   });
 
   it.each([
-    { ...completed, response: { ...completed.response, actions: [] } },
-    { ...completed, response: { ...completed.response, actions: [receipt, receipt] } },
+    { ...completed, receipt: null },
+    { ...completed, receipt: { ...receipt, kind: 'slack_notify' } },
     { ...completed, status: 'failed' },
-    { ...completed, response: { ...completed.response, actions: [{ ...receipt, artifact: null }] } },
-    { ...completed, response: { ...completed.response, actions: [{ ...receipt, operation: null }] } },
-    { ...completed, response: { ...completed.response, actions: [{ ...receipt, verification: 'unverifiable' }] } },
-    { ...completed, response: { ...completed.response, actions: [{ ...receipt, file_path: null }] } },
-    { ...completed, response: { ...completed.response, actions: [{ ...receipt, artifact: { ...artifact, sha256: 'c'.repeat(64) } }] } },
-    { ...completed, response: { ...completed.response, actions: [{ ...receipt, artifact: { ...artifact, byte_count: 41 } }] } },
+    { ...completed, receipt: { ...receipt, artifact: null } },
+    { ...completed, receipt: { ...receipt, operation: null } },
+    { ...completed, receipt: { ...receipt, verification: 'unverifiable' } },
+    { ...completed, receipt: { ...receipt, file_path: null } },
+    { ...completed, receipt: { ...receipt, artifact: { ...artifact, sha256: 'c'.repeat(64) } } },
+    { ...completed, receipt: { ...receipt, artifact: { ...artifact, byte_count: 41 } } },
   ])('rejects contradictory completion or save binding', (value) => {
     expect(() => parseAnswerExport(value, 'answer-1')).toThrowError(expect.objectContaining({ code: 'invalid_response' }));
   });
@@ -129,7 +127,7 @@ describe('answer export response', () => {
     { ...artifact, filename: 'answer.html' },
     { ...artifact, expires_at: artifact.created_at },
   ])('rejects an invalid download artifact location or retention interval', (value) => {
-    const result = { ...completed, response: { ...completed.response, actions: [{ ...receipt, artifact: value }] } };
+    const result = { ...completed, receipt: { ...receipt, artifact: value } };
     expect(() => parseAnswerExport(result, 'answer-1')).toThrowError(expect.objectContaining({ code: 'invalid_response' }));
   });
 });
@@ -144,7 +142,7 @@ describe('Slack delivery response', () => {
       ...sentDelivery, status: 'not_sent', message_ts: null, failure,
     } } },
   ])('preserves $name and its bound operation', ({ action }) => {
-    const result = { ...fixtures.responses.completed, response: { ...completed.response, actions: [action] } };
+    const result = { ...fixtures.responses.completed, response: { ...fixtures.responses.completed.response, actions: [action] } };
 
     expect(parseAgentResponse(result)).toEqual(result);
   });
@@ -192,7 +190,7 @@ describe('Slack delivery response', () => {
     { name: 'previous delivery without operation', action: { ...slackReceipt, status: 'skipped', slack: null,
       previous_slack: { ...uncertainDelivery, operation: null } } },
   ])('rejects $name instead of accepting contradictory action state', ({ action }) => {
-    const result = { ...fixtures.responses.completed, response: { ...completed.response, actions: [action] } };
+    const result = { ...fixtures.responses.completed, response: { ...fixtures.responses.completed.response, actions: [action] } };
 
     expect(() => parseAgentResponse(result)).toThrowError(expect.objectContaining({ code: 'invalid_response' }));
   });

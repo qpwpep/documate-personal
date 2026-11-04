@@ -66,40 +66,12 @@
     "citations": [
       {
         "number": 1,
-        "evidence": {
-          "id": "ref:037a8ebfff77d4773ade1883cad1a7f864943c066feeae76f1cc36a519a64de4",
-          "snapshot": {
-            "snapshot_id": "snapshot:8b54c459df564df32620bf2c1291f173274de5c2f143a5dbb6cd260d4dcc5ec7",
-            "document_id": "doc:0c71268b5631d67268ba0cbfcf06f254e598e3f672d8a537645c64ea207cf81c",
-            "content_hash": "sha256:32b9fb7590c096c81ddee499877161b6ce79718d075f0701866bf2614e6ad459",
-            "source_uri": "https://docs.python.org/3/library/example.html",
-            "title": "같은 출처",
-            "media_type": "text/markdown",
-            "source_type": "official",
-            "parser": "fixture",
-            "parser_version": "1",
-            "parser_config": {},
-            "capture_scope": "full_document",
-            "quality_issues": []
-          },
-          "element": {
-            "element_id": "paragraph-1",
-            "kind": "paragraph",
-            "text": "보관된 원문 문장입니다.",
-            "parent_id": null,
-            "order": 0,
-            "heading_level": null,
-            "heading_path": [],
-            "language": null,
-            "table": null,
-            "anchors": [],
-            "metadata": {}
-          },
-          "selection": {
-            "start": 0,
-            "end": 13,
-            "cell_ids": []
-          }
+        "evidence_id": "ref:037a8ebfff77d4773ade1883cad1a7f864943c066feeae76f1cc36a519a64de4",
+        "source_id": "source:1cea37bc7c6eeab78543e1571349864b7c5d8fe5352d35b231906d81d5b2443f",
+        "selection": {
+          "start": 0,
+          "end": 13,
+          "cell_ids": []
         }
       }
     ],
@@ -139,7 +111,38 @@
     "actions": [],
     "content_hash": "417fb19f4aca333d27a9f04cf317e0826cbd2208a382212a56bdaa40dd8b4600",
     "retrieval_required": false,
-    "semantic_validation": null
+    "semantic_validation": null,
+    "sources": {
+      "source:1cea37bc7c6eeab78543e1571349864b7c5d8fe5352d35b231906d81d5b2443f": {
+        "snapshot": {
+          "snapshot_id": "snapshot:8b54c459df564df32620bf2c1291f173274de5c2f143a5dbb6cd260d4dcc5ec7",
+          "document_id": "doc:0c71268b5631d67268ba0cbfcf06f254e598e3f672d8a537645c64ea207cf81c",
+          "content_hash": "sha256:32b9fb7590c096c81ddee499877161b6ce79718d075f0701866bf2614e6ad459",
+          "source_uri": "https://docs.python.org/3/library/example.html",
+          "title": "같은 출처",
+          "media_type": "text/markdown",
+          "source_type": "official",
+          "parser": "fixture",
+          "parser_version": "1",
+          "parser_config": {},
+          "capture_scope": "full_document",
+          "quality_issues": []
+        },
+        "element": {
+          "element_id": "paragraph-1",
+          "kind": "paragraph",
+          "text": "보관된 원문 문장입니다.",
+          "parent_id": null,
+          "order": 0,
+          "heading_level": null,
+          "heading_path": [],
+          "language": null,
+          "table": null,
+          "anchors": [],
+          "metadata": {}
+        }
+      }
+    }
   },
   "quote": {
     "content": {
@@ -163,40 +166,12 @@
     "citations": [
       {
         "number": 1,
-        "evidence": {
-          "id": "ref:037a8ebfff77d4773ade1883cad1a7f864943c066feeae76f1cc36a519a64de4",
-          "snapshot": {
-            "snapshot_id": "snapshot:8b54c459df564df32620bf2c1291f173274de5c2f143a5dbb6cd260d4dcc5ec7",
-            "document_id": "doc:0c71268b5631d67268ba0cbfcf06f254e598e3f672d8a537645c64ea207cf81c",
-            "content_hash": "sha256:32b9fb7590c096c81ddee499877161b6ce79718d075f0701866bf2614e6ad459",
-            "source_uri": "https://docs.python.org/3/library/example.html",
-            "title": "같은 출처",
-            "media_type": "text/markdown",
-            "source_type": "official",
-            "parser": "fixture",
-            "parser_version": "1",
-            "parser_config": {},
-            "capture_scope": "full_document",
-            "quality_issues": []
-          },
-          "element": {
-            "element_id": "paragraph-1",
-            "kind": "paragraph",
-            "text": "보관된 원문 문장입니다.",
-            "parent_id": null,
-            "order": 0,
-            "heading_level": null,
-            "heading_path": [],
-            "language": null,
-            "table": null,
-            "anchors": [],
-            "metadata": {}
-          },
-          "selection": {
-            "start": 0,
-            "end": 13,
-            "cell_ids": []
-          }
+        "evidence_id": "ref:037a8ebfff77d4773ade1883cad1a7f864943c066feeae76f1cc36a519a64de4",
+        "source_id": "source:1cea37bc7c6eeab78543e1571349864b7c5d8fe5352d35b231906d81d5b2443f",
+        "selection": {
+          "start": 0,
+          "end": 13,
+          "cell_ids": []
         }
       }
     ],
@@ -212,7 +187,38 @@
     "actions": [],
     "content_hash": "b2fcdb377cda30cc97ffa5da0cb9d42e19d1c6172d350eb1315c01a45877fc1f",
     "retrieval_required": false,
-    "semantic_validation": null
+    "semantic_validation": null,
+    "sources": {
+      "source:1cea37bc7c6eeab78543e1571349864b7c5d8fe5352d35b231906d81d5b2443f": {
+        "snapshot": {
+          "snapshot_id": "snapshot:8b54c459df564df32620bf2c1291f173274de5c2f143a5dbb6cd260d4dcc5ec7",
+          "document_id": "doc:0c71268b5631d67268ba0cbfcf06f254e598e3f672d8a537645c64ea207cf81c",
+          "content_hash": "sha256:32b9fb7590c096c81ddee499877161b6ce79718d075f0701866bf2614e6ad459",
+          "source_uri": "https://docs.python.org/3/library/example.html",
+          "title": "같은 출처",
+          "media_type": "text/markdown",
+          "source_type": "official",
+          "parser": "fixture",
+          "parser_version": "1",
+          "parser_config": {},
+          "capture_scope": "full_document",
+          "quality_issues": []
+        },
+        "element": {
+          "element_id": "paragraph-1",
+          "kind": "paragraph",
+          "text": "보관된 원문 문장입니다.",
+          "parent_id": null,
+          "order": 0,
+          "heading_level": null,
+          "heading_path": [],
+          "language": null,
+          "table": null,
+          "anchors": [],
+          "metadata": {}
+        }
+      }
+    }
   },
   "mismatch": {
     "content": {
@@ -236,40 +242,12 @@
     "citations": [
       {
         "number": 1,
-        "evidence": {
-          "id": "ref:037a8ebfff77d4773ade1883cad1a7f864943c066feeae76f1cc36a519a64de4",
-          "snapshot": {
-            "snapshot_id": "snapshot:8b54c459df564df32620bf2c1291f173274de5c2f143a5dbb6cd260d4dcc5ec7",
-            "document_id": "doc:0c71268b5631d67268ba0cbfcf06f254e598e3f672d8a537645c64ea207cf81c",
-            "content_hash": "sha256:32b9fb7590c096c81ddee499877161b6ce79718d075f0701866bf2614e6ad459",
-            "source_uri": "https://docs.python.org/3/library/example.html",
-            "title": "같은 출처",
-            "media_type": "text/markdown",
-            "source_type": "official",
-            "parser": "fixture",
-            "parser_version": "1",
-            "parser_config": {},
-            "capture_scope": "full_document",
-            "quality_issues": []
-          },
-          "element": {
-            "element_id": "paragraph-1",
-            "kind": "paragraph",
-            "text": "보관된 원문 문장입니다.",
-            "parent_id": null,
-            "order": 0,
-            "heading_level": null,
-            "heading_path": [],
-            "language": null,
-            "table": null,
-            "anchors": [],
-            "metadata": {}
-          },
-          "selection": {
-            "start": 0,
-            "end": 13,
-            "cell_ids": []
-          }
+        "evidence_id": "ref:037a8ebfff77d4773ade1883cad1a7f864943c066feeae76f1cc36a519a64de4",
+        "source_id": "source:1cea37bc7c6eeab78543e1571349864b7c5d8fe5352d35b231906d81d5b2443f",
+        "selection": {
+          "start": 0,
+          "end": 13,
+          "cell_ids": []
         }
       }
     ],
@@ -287,6 +265,37 @@
     "actions": [],
     "content_hash": "30de3ff2421e9ecbecfdabbb78c6de6ca3fb431d7655c65cad8a7367610d40fc",
     "retrieval_required": false,
-    "semantic_validation": null
+    "semantic_validation": null,
+    "sources": {
+      "source:1cea37bc7c6eeab78543e1571349864b7c5d8fe5352d35b231906d81d5b2443f": {
+        "snapshot": {
+          "snapshot_id": "snapshot:8b54c459df564df32620bf2c1291f173274de5c2f143a5dbb6cd260d4dcc5ec7",
+          "document_id": "doc:0c71268b5631d67268ba0cbfcf06f254e598e3f672d8a537645c64ea207cf81c",
+          "content_hash": "sha256:32b9fb7590c096c81ddee499877161b6ce79718d075f0701866bf2614e6ad459",
+          "source_uri": "https://docs.python.org/3/library/example.html",
+          "title": "같은 출처",
+          "media_type": "text/markdown",
+          "source_type": "official",
+          "parser": "fixture",
+          "parser_version": "1",
+          "parser_config": {},
+          "capture_scope": "full_document",
+          "quality_issues": []
+        },
+        "element": {
+          "element_id": "paragraph-1",
+          "kind": "paragraph",
+          "text": "보관된 원문 문장입니다.",
+          "parent_id": null,
+          "order": 0,
+          "heading_level": null,
+          "heading_path": [],
+          "language": null,
+          "table": null,
+          "anchors": [],
+          "metadata": {}
+        }
+      }
+    }
   }
 }
