@@ -166,16 +166,20 @@ def scan_declarations(text: str) -> list[DocDeclaration]:
         if not _DECLARATION.match(first):
             index += 1
             continue
-        following = index
-        chars = 0
-        candidate: list[str] = []
-        while following < min(len(lines), index + _SIGNATURE_MAX_LINES):
-            chars += len(lines[following])
-            if chars > _SIGNATURE_MAX_CHARS:
-                break
-            candidate.append(first if following == index else clean_markup(lines[following]))
-            following += 1
-        parsed = _scan_signature("\n".join(candidate))
+        # Most reference declarations fit on one line. Once complete, their
+        # following prose cannot extend the signature and need not be cleaned.
+        parsed = _scan_signature(first)
+        if parsed is None:
+            following = index
+            chars = 0
+            candidate: list[str] = []
+            while following < min(len(lines), index + _SIGNATURE_MAX_LINES):
+                chars += len(lines[following])
+                if chars > _SIGNATURE_MAX_CHARS:
+                    break
+                candidate.append(first if following == index else clean_markup(lines[following]))
+                following += 1
+            parsed = _scan_signature("\n".join(candidate))
         if parsed is None:
             index += 1
             continue

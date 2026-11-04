@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import ast
+from functools import lru_cache
 from typing import cast
 from urllib.parse import urlparse
 
 from src.core.evidence import EvidenceRef
-from src.infra.tools.docs_search.sections import clean_markup, definition_sections, parse_doc_sections, scan_declarations
+from src.infra.tools.docs_search.sections import (
+    DocDeclaration, DocSection, clean_markup, definition_sections, parse_doc_sections, scan_declarations,
+)
 
 
 def documentation_declaration_scope(evidence: EvidenceRef) -> dict[str, object] | None:
@@ -15,13 +18,11 @@ def documentation_declaration_scope(evidence: EvidenceRef) -> dict[str, object] 
             or urlparse(evidence.snapshot.source_uri).hostname != "docs.python.org"):
         return None
     element, selection = evidence.element, evidence.selection
-    declarations = scan_declarations(element.text)
-    sections = parse_doc_sections(element.text, title=evidence.snapshot.title,
-                                  url=evidence.snapshot.source_uri, declarations=declarations,
-                                  definition_owners=element.metadata.get("definition_owners"))
-    definitions = {section.start: section for section in definition_sections(
-        element.text, declarations=declarations, sections=sections,
-    )}
+    declarations, sections, source_definitions = _document_structure(
+        element.text, evidence.snapshot.title, evidence.snapshot.source_uri,
+        tuple(sorted((element.metadata.get("definition_owners") or {}).items())),
+    )
+    definitions = {section.start: section for section in source_definitions}
     selection_end = len(element.text) if selection.end is None else selection.end
     api_owners = []
     defined_owner = None
@@ -63,3 +64,18 @@ def documentation_declaration_scope(evidence: EvidenceRef) -> dict[str, object] 
         selected.append(record)
     return {"kind": "documentation_declarations", "declarations": selected,
             "api_owners": api_owners} if selected or api_owners else None
+
+
+@lru_cache(maxsize=8)
+def _document_structure(
+    text: str, title: str, url: str, definition_owners: tuple[tuple[str, str], ...],
+) -> tuple[tuple[DocDeclaration, ...], tuple[DocSection, ...], tuple[DocSection, ...]]:
+    # Several evidence ranges and validation predicates share one captured
+    # page. Retain only eight immutable parses; selection-specific scopes stay
+    # fresh, and changed text or captured owners produce a different entry.
+    declarations = scan_declarations(text)
+    sections = parse_doc_sections(
+        text, title=title, url=url, declarations=declarations, definition_owners=dict(definition_owners),
+    )
+    definitions = definition_sections(text, declarations=declarations, sections=sections)
+    return tuple(declarations), tuple(sections), tuple(definitions)
