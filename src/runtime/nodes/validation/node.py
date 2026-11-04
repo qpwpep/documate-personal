@@ -8,6 +8,7 @@ from src.core.answer_schema.source_locations import SOURCE_LOCATION_PLACEHOLDER
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
+from src.core.contracts.boundary.retrieval import get_retrieval_state
 from src.core.contracts.boundary.response import get_response_state
 from src.infra.logging_utils import log_event
 from src.runtime.nodes.retry import build_retry_update
@@ -218,6 +219,7 @@ def make_post_synthesis_validation_node(
                 snapshot, response_result=final_response.result,
                 evidence_packet=final_response.evidence_packet,
                 evidence_requirement_map=final_response.evidence_requirement_map,
+                decision_cache=assessment.decision_cache or snapshot.decision_cache,
             )
             revised_assessment = assess_validation(revised_snapshot)
             assess_post_semantics(
@@ -232,6 +234,11 @@ def make_post_synthesis_validation_node(
                 snapshot=revised_snapshot, assessment=revised_assessment,
                 attempt=response.synthesis_attempt, needs_retry=False, allow_filtered_answer=False,
             ))
+        final_assessment = semantic_assessments[-1][1]
+        if final_assessment.decision_cache:
+            updates["retrieval"] = get_retrieval_state(state).model_copy(update={
+                "decision_cache": final_assessment.decision_cache,
+            })
         semantic_events = []
         for revision, semantic_assessment in semantic_assessments:
             if not semantic_assessment.semantic_probabilities and not semantic_assessment.semantic_refusals:

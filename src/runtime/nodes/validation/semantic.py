@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import ast
 import json
-from typing import Any, Protocol
+from typing import Any
 
 from src.core.answer_schema import (
     AnswerDocument, AnswerResponse, SemanticCheck, SemanticValidation, iter_content_units,
@@ -25,18 +25,12 @@ from src.core.planner_schema import RetrievalTask
 from src.core.prompts import CODE_API_IDENTITY_POLICY
 from src.core.request_bodies import ExtractBody
 from src.infra.tools.docs_search.policy import is_current_stable_doc_url
-from src.runtime.nodes.validation.decision_input import encode_decision_input
+from src.runtime.nodes.validation.cached_decisions import (
+    CachedDecisionJob, DecisionEvaluator, decision_job_fingerprint, evaluate_cached_jobs, uncached_job_count,
+)
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
 from src.runtime.source_scope import documentation_declaration_scope
 from src.runtime.nodes.validation.policy import retrieval_gap_message
-
-
-class DecisionEvaluator(Protocol):
-    model_name: str
-    max_questions_per_call: int
-
-    def evaluate(self, *, input: str, questions: list[dict[str, str]],
-                 stage: str, attempt: int = 1, reserve_calls: int = 0) -> DecisionResult: ...
 
 
 API_AVAILABILITY_INSTRUCTIONS = (
@@ -66,16 +60,27 @@ TARGET_IDENTIFICATION_INSTRUCTIONS = (
     "Do the selected sources identify the source passage or occurrence that the task asks to analyze, "
     "in the specified source and occurrence scope, independently of whether the requested conclusion about that target can be established? "
     "Use the selected source names, declarations, assignments and surrounding context to resolve that subject. "
+    "For official documentation, the matching page title/URI together with a selected matching API declaration "
+    "or parser-confirmed API owner identifies the requested API passage. Requested return behavior, parameter "
+    "semantics or exceptions need not appear in the title: their support belongs to target_analysis_supported. "
     "For an ordinary named lookup, a matching declaration or assignment can identify the subject without whole-file coverage "
     "or proof that it is unique, first, last, or a final runtime value. Do not add such requirements when the task does not ask for them. "
     "When the task asks whether that subject has a property or API identity, do not assume the answer must be positive merely to identify it. "
+    "A passage identifying the requested setting or source dependency and explicitly stating that its value is "
+    "unspecified or unavailable can identify that target for a supported negative or indeterminate answer. "
+    "Respect an explicit permitted outcome in the task query; do not require a positive value merely "
+    "because the requested question names it. A failed search alone does not identify a source passage. "
     "Assess ordering or exhaustive coverage only when required by the task: first, last, and all occurrences require evidence "
     "ruling out other matches in the relevant preceding, following, or remaining regions. "
+    "This occurrence scope concerns which source passage to select. First/last/all describing an API's values, "
+    "return semantics or behavior do not request an exhaustive search for source occurrences. "
     "For a last occurrence in a Python file, a selected suffix reaching the known file end can establish the target despite an omitted prefix. "
     "If later file text is unselected, it cannot rule out a later occurrence. A cell or document element end is not the complete file end. "
     "When such a requested occurrence scope remains unestablished, explaining another visible occurrence or admitting that the requested "
     "occurrence is unknown does not satisfy target identification. "
-    "Do not assess whether the target has the requested API identity, whether an explanation is informative, or whether runtime execution occurred."
+    "For uploaded expressions, whether the identified expression is bound to a particular API is an analysis "
+    "question, separate from locating that expression. Do not assess whether an explanation is informative "
+    "or whether runtime execution occurred."
 )
 
 
@@ -86,6 +91,14 @@ TARGET_ANALYSIS_INSTRUCTIONS = (
     "The task query and requirement define the resolved scope for this judgment. Judge that task's "
     "subject and aspects only; do not add subjects from other tasks or earlier requests. "
     "Each task need not answer the entire multi-subject request; the displayed body's fulfillment is checked separately. "
+    "For a request combining uploaded material with official documentation, this task establishes only its "
+    "route's contribution: uploaded code/data can establish its chosen values, operations and source-visible "
+    "constraints, while the documentation task establishes external API rules. The final body combines those "
+    "premises; do not require either route to independently prove the whole combined conclusion. "
+    "When the user explicitly permits reporting that a value cannot be determined, selected source evidence "
+    "of the relevant omission or missing dependency can fully support that requested outcome. Do not demand "
+    "the unavailable value as well. Missing search results or omitted ranges alone still cannot establish "
+    "absence from the original source. "
     "Use only these selected ranges, not other entries or facts outside them. Complementary excerpts "
     "may jointly satisfy the requirement. A matching title or keyword alone is insufficient. "
     "Judge evidence available for writing an answer, not whether an answer already satisfies language, "
@@ -555,6 +568,20 @@ def assess_post_semantics(
     model_units = dict(iter_content_units(model_document))
     units = list(iter_content_units(result.content))
     block_types = {f"b{index}": block.type for index, block in enumerate(result.content.blocks)}
+    table_context = {}
+    for index, block in enumerate(result.content.blocks):
+        if not isinstance(block, TableBlock):
+            continue
+        columns = [column.text for column in block.columns]
+        for column_index in range(len(columns)):
+            table_context[f"b{index}.columns.{column_index}"] = {
+                "columns": columns, "column_index": column_index,
+            }
+        for row_index, row in enumerate(block.rows):
+            for column_index in range(len(columns)):
+                table_context[f"b{index}.rows.{row_index}.{column_index}"] = {
+                    "columns": columns, "row": [cell.text for cell in row], "column_index": column_index,
+                }
     # Independent content, format and sentence-scope conditions remain semantic.
     # A verified copy adds no claims or citations to its bound source, whether
     # that source is user input or a previously displayed answer.
@@ -569,6 +596,7 @@ def assess_post_semantics(
         evaluated_units.append({
             "name": name, "unit_id": unit_id, **model_units[unit_id].model_dump(mode="json"),
             "block_type": block_type,
+            **({"presentation_context": table_context[unit_id]} if unit_id in table_context else {}),
             # A different unit's citations must never support this unit's claims.
             "cited_sources": [_post_source(source, reference_ids) for source in sources_by_question[name]],
         })
@@ -596,6 +624,9 @@ def assess_post_semantics(
                 "name of its failure exception. Source titles, related APIs and correct-looking results "
                 "cannot fill a missing premise. Check every material detail, not just the overall topic. "
                 "Do not borrow another unit's sources or accept a valid citation identifier as proof. "
+                "For a table cell, presentation_context gives the displayed column headers and row so its "
+                "short value can be interpreted as the claim made in that table. This is answer context, "
+                "not additional evidence: other cells' claims and citations cannot prove this cell. "
                 "The bound prior answer is a transformation target, not a substitute for this unit's cited_sources. "
                 "For interaction text, headings and labels, allow neutral presentation or conversation "
                 "without citations, including faithful recall and direct analysis of user-supplied text, code or facts "
@@ -762,22 +793,22 @@ def assess_post_semantics(
     terminal = set(snapshot.terminal_failed_requirement_ids)
     evaluated_tasks = [task for task in snapshot.planner_output.tasks
                        if snapshot.retrieval_required and task.requirement_id not in terminal]
-    requirements = []
-    requirement_questions = []
+    requirement_jobs = []
     for index, task in enumerate(evaluated_tasks):
         name = f"requirement_{index}"
         cited_sources = [source for source in sources_by_requirement[task.requirement_id] if source.id in cited_ids]
-        requirements.append({
-            "name": name, "task": semantic_task_input(task, snapshot),
+        entry = {
+            "task": semantic_task_input(task, snapshot),
             "sources": [_source(item) for item in cited_sources],
-        })
-        requirement_questions.extend({
-            "type": "predicate", "name": f"{name}_{criterion}",
-            "instructions": scoped_evidence_instructions(
-                collection="requirements", entry_name=name, rubric=instructions,
-            ),
-        } for criterion, instructions in REQUIREMENT_CRITERIA)
-    if not questions and not requirement_questions:
+        }
+        for criterion, rubric in REQUIREMENT_CRITERIA:
+            instructions = scoped_evidence_instructions(collection="requirements", entry_name="<entry>", rubric=rubric)
+            requirement_jobs.append(CachedDecisionJob(
+                name=f"{name}_{criterion}", entry_name=name, entry=entry, instructions=instructions,
+                fingerprint=decision_job_fingerprint(collection="requirements", entry=entry,
+                    instructions=instructions, model=decisions_client.model_name),
+            ))
+    if not questions and not requirement_jobs:
         # Local copying and quota checks can discharge every obligation.
         # No model probability or empty semantic report is needed in that case.
         return
@@ -813,7 +844,7 @@ def assess_post_semantics(
         body_predicates = [predicate for predicate in body_predicates
                            if predicate["name"] != "request_fulfilled"]
     requirement_calls = (
-        len(requirement_questions) + decisions_client.max_questions_per_call - 1
+        uncached_job_count(requirement_jobs, snapshot, assessment) + decisions_client.max_questions_per_call - 1
     ) // decisions_client.max_questions_per_call
     operation_calls = (
         len(operation_predicates) + decisions_client.max_questions_per_call - 1
@@ -868,11 +899,10 @@ def assess_post_semantics(
     # Cited evidence must satisfy its own resolved task. Mixing the whole body
     # request into this judgment can reject a known value because a different
     # requested value is unavailable. Body fulfillment still sees full context.
-    cited_decisions = decisions_client.evaluate(
-        input=encode_decision_input({"requirements": requirements}),
-        questions=requirement_questions,
-        stage="post_synthesis_validation", attempt=attempt,
-    ) if requirement_questions else DecisionResult(probabilities={}, refused_names=set())
+    cited_decisions = evaluate_cached_jobs(
+        snapshot=snapshot, assessment=assessment, decisions_client=decisions_client,
+        jobs=requirement_jobs, collection="requirements", stage="post_synthesis_validation", attempt=attempt,
+    ) if requirement_jobs else DecisionResult(probabilities={}, refused_names=set())
     probabilities = {**source_decisions.probabilities, **body_decisions.probabilities,
                      **operation_decisions.probabilities, **cited_decisions.probabilities}
     refused_names = (source_decisions.refused_names | body_decisions.refused_names

@@ -1035,18 +1035,20 @@ def test_post_validation_budget_covers_initial_repair_and_filtered_body_with_sep
         # remove it and check the retained body within the same request budget.
         state["response"] = draft
         state.update(validate(state))
-        assert request_call_budget("post_synthesis_validation").calls == 18
-        assert request_call_budget("post_synthesis_validation").remaining_calls == 18
+        assert request_call_budget("post_synthesis_validation").remaining_calls > 0
         assert request_call_budget("post_synthesis_validation").max_calls == 36
         assert request_call_budget("post_synthesis_validation").timeout_seconds == 45
 
     payloads = [read_decision_input(call["input"]) for call in boundary.requests]
-    assert [set(payload) == {"units"} for payload in payloads] == ([True] * 4 + [False, False]) * 3
-    assert ["rendered_response" in payload for payload in payloads] == ([False] * 4 + [True, False]) * 3
     assert all(len(payload["units"]) == 1 for payload in payloads if set(payload) == {"units"})
-    assert unsupported_claim in boundary.requests[4]["input"]
-    assert unsupported_claim in boundary.requests[10]["input"]
-    assert unsupported_claim not in boundary.requests[16]["input"]
+    body_inputs = [call["input"] for call in boundary.requests if "rendered_response" in read_decision_input(call["input"])]
+    assert len(body_inputs) == 3
+    assert unsupported_claim in body_inputs[0]
+    assert unsupported_claim in body_inputs[1]
+    assert unsupported_claim not in body_inputs[2]
+    # Unchanged source/task judgments are shared across repair and filtering;
+    # each changed displayed body still receives its own fulfillment check.
+    assert len([payload for payload in payloads if "requirements" in payload]) == 1
     assert diagnostics == []
     assert not state["retry"].needs_retry
     assert state["response"].kind == "answer"

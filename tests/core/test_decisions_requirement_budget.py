@@ -36,20 +36,29 @@ def test_post_requirement_batch_boundary_preserves_each_check_and_fails_at_the_e
         checks = state["response"].result.semantic_validation.checks
         assert len([check for check in checks if check.name.startswith("requirement_")]) == 2 * requirement_count
 
-        calls_per_revision = 2 + len(question_batches)
-        for _ in range(36 // calls_per_revision - 1):
+        budget = request_call_budget("post_synthesis_validation")
+        # Identical requirement inputs retain their real judgments. The body
+        # still needs its own grounding and fulfillment checks on every pass.
+        for _ in range(budget.remaining_calls // 2):
             state.update(validate(state))
+        repeated_requirement_calls = [call for call in boundary.requests
+                                      if "requirements" in json.loads(call["input"])]
+        assert repeated_requirement_calls == requirement_calls
+        assert len([check for check in state["response"].result.semantic_validation.checks
+                    if check.name.startswith("requirement_")]) == 2 * requirement_count
         retained_response = state["response"]
         observed_requests = len(boundary.requests)
         with pytest.raises(LLMCallError) as failure:
             validate(state)
-        budget = request_call_budget("post_synthesis_validation")
 
     assert failure.value.problem.code == "call_budget_exhausted"
     assert failure.value.diagnostic.budget_reason == "calls"
     assert state["response"] == retained_response
     assert len(boundary.requests) == observed_requests
     assert all(len(call["questions"]) <= 200 for call in boundary.requests)
-    assert budget.calls == observed_requests == 36
+    assert budget.calls == observed_requests
+    # A remaining single slot cannot finish both body checks. Reservation must
+    # reject the whole next pass before spending it on an incomplete judgment.
+    assert budget.remaining_calls < 2
     assert budget.max_calls == 36
     assert budget.timeout_seconds == 45

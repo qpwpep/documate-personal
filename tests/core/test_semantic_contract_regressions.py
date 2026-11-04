@@ -89,6 +89,101 @@ def test_conditional_transform_allows_an_already_satisfied_unchanged_document():
     assert updates["response"].kind == "answer"
 
 
+def test_table_cell_grounding_receives_its_headers_and_row_without_borrowing_citations():
+    state = _state()
+    evidence = state["response"].evidence_packet[0]
+    other = _evidence("Other source only supports the reason.", subject="other")
+    document = AnswerDocument(blocks=[TableBlock(
+        columns=[ContentUnit(text="센서"), ContentUnit(text="판정"), ContentUnit(text="사유")],
+        rows=[[ContentUnit(text="C", basis="source", refs=[evidence.id]),
+               ContentUnit(text="제외", basis="source", refs=[evidence.id]),
+               ContentUnit(text="결측", basis="source", refs=[other.id])]],
+    )])
+    state["response"] = state["response"].model_copy(update={
+        "result": finalize_answer(document, [evidence, other], retrieval_required=True),
+        "evidence_packet": [evidence, other],
+        "evidence_requirement_map": {evidence.id: ["path_exists"], other.id: ["path_exists"]},
+    })
+    boundary = DecisionsBoundary()
+
+    make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
+
+    cell, = [json.loads(call["input"])["units"][0] for call in boundary.requests
+             if [question["name"] for question in call["questions"]] == ["grounded_3"]]
+    assert cell["presentation_context"] == {
+        "columns": ["센서", "판정", "사유"], "row": ["C", "제외", "결측"], "column_index": 0,
+    }
+    assert [source["id"] for source in cell["cited_sources"]] == [cell["refs"][0]]
+    assert other.id not in json.dumps(cell, ensure_ascii=False)
+
+
+def test_post_reuses_the_identical_prepared_requirement_judgments():
+    state = _state()
+    pre = DecisionsBoundary({"requirement_0_target_identified": 0.94,
+                             "requirement_0_target_analysis_supported": 0.93})
+    draft = state["response"]
+    state.update(make_pre_synthesis_validation_node(False, decisions_client=pre,
+        excerpt_limits=synthesis_excerpt_limits())(state))
+    state["response"] = draft
+    post = DecisionsBoundary({"requirement_0_target_identified": 0.1,
+                              "requirement_0_target_analysis_supported": 0.1})
+
+    updates = make_post_synthesis_validation_node(False, decisions_client=post)(state)
+
+    assert updates["response"].kind == "answer"
+    assert all("requirements" not in json.loads(call["input"]) for call in post.requests)
+    checks = {check.name: check.probability for check in updates["response"].result.semantic_validation.checks}
+    assert checks["requirement_target_identified:path_exists"] == 0.94
+    assert checks["requirement_target_analysis_supported:path_exists"] == 0.93
+
+
+@pytest.mark.parametrize("stage", ["pre", "post"])
+def test_requirement_judgment_preserves_explicit_unknown_outcome_across_search_rewrites(stage):
+    state = _state()
+    instruction = "자료의 값을 알려줘. 자료에 정해지지 않았다면 확인할 수 없다고 알려줘."
+    task = state["planner"].output.tasks[0].model_copy(update={"query": instruction})
+    state["planner"] = state["planner"].model_copy(update={
+        "output": state["planner"].output.model_copy(update={"tasks": [task.model_copy(update={"query": "value lookup"})]}),
+    })
+    state["retry"] = state["retry"].model_copy(update={"original_tasks": [task]})
+    state["runtime"] = state["runtime"].model_copy(update={
+        "request_contract": state["runtime"].request_contract.model_copy(update={
+            "body": ComposeBody(instruction="Also explain the unrelated second task."),
+        }),
+    })
+    boundary = DecisionsBoundary()
+    node = (make_pre_synthesis_validation_node(False, decisions_client=boundary,
+        excerpt_limits=synthesis_excerpt_limits()) if stage == "pre"
+        else make_post_synthesis_validation_node(False, decisions_client=boundary))
+
+    node(state)
+
+    payload, = [json.loads(call["input"]) for call in boundary.requests
+                if "requirements" in json.loads(call["input"])]
+    assert payload["tasks"]["path_exists"]["query"] == instruction
+    assert "unrelated second task" not in json.dumps(payload)
+
+
+def test_post_checks_new_cited_selection_instead_of_borrowing_prepared_approval():
+    state = _state()
+    draft = state["response"]
+    state.update(make_pre_synthesis_validation_node(False, decisions_client=DecisionsBoundary(),
+        excerpt_limits=synthesis_excerpt_limits())(state))
+    different = _evidence("Path.exists()", subject="pathlib.Path.exists")
+    state["response"] = draft.model_copy(update={
+        "result": finalize_answer(text_document("Path.exists() returns True", basis="source", refs=[different.id]),
+                                  [different], retrieval_required=True),
+        "evidence_packet": [different], "evidence_requirement_map": {different.id: ["path_exists"]},
+    })
+    boundary = DecisionsBoundary({"requirement_0_target_analysis_supported": 0.1})
+
+    updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
+
+    assert updates["retry"].needs_retry
+    assert updates["retry"].failed_requirement_ids == ["path_exists"]
+    assert any("requirements" in json.loads(call["input"]) for call in boundary.requests)
+
+
 def test_citation_scope_keeps_actual_source_kind_and_independently_blocks_truthful_body():
     state = _state()
     instruction = "첨부 코드만 인용해서 설명해줘."
