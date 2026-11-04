@@ -25,7 +25,6 @@ SynthesisMode = Literal[
     "plain_summary_attach_fallback",
     "korean_template_summary_fallback",
     "deterministic_grounded_fallback",
-    "deterministic_grounded_direct",
 ]
 
 _STAGE_TOTAL_FIELD_BY_NAME: dict[StageName, str] = {

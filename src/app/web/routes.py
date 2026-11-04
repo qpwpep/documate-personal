@@ -107,8 +107,8 @@ router.add_api_route(
 
 @router.post("/sessions/{session_id}/answers/{answer_id}/save", response_model=AnswerExportResult)
 def save_answer(session_id: str, answer_id: str, request: Request):
-    request_id = request.state.request_id[:8]
-    return request.app.state.answer_export_service.save(_upload_session_id(session_id), answer_id, request_id=request_id)
+    execution_id = request.state.execution_id
+    return request.app.state.answer_export_service.save(_upload_session_id(session_id), answer_id, execution_id=execution_id)
 
 
 def _encode_sse_event(event: AgentStreamEvent) -> str:
@@ -129,7 +129,7 @@ async def root():
             "description": (
                 "UTF-8 SSE frames: event: <name>\\ndata: <JSON object>\\n\\n. "
                 "Each execution ends with one final_response carrying status, response, problem, message, "
-                "request_id, trace, debug and upload_manifest. Status distinguishes completed, needs_input, "
+                "execution_id, trace, debug and upload_manifest. Status distinguishes completed, needs_input, "
                 "failed, partial and refused; a failed result has no answer document. "
                 "The manifest is captured under the session lock; null on failure means unknown state, not an empty attachment set. "
                 "HTTP 200 and done alone do not indicate success. Clients must not automatically "
@@ -141,10 +141,10 @@ async def root():
                     "schema": {"type": "string"},
                     "x-sse-events": AGENT_STREAM_EVENT_SCHEMAS,
                     "example": (
-                        'event: request_started\ndata: {"request_id":"abc12345","session_id":"demo"}\n\n'
+                        'event: request_started\ndata: {"execution_id":"abc12345","session_id":"demo"}\n\n'
                         'event: final_response\ndata: {"status":"failed","response":null,"message":"",'
                         '"problem":{"code":"internal_error","stage":"request","message":"요청을 완료하지 못했습니다.",'
-                        '"next_action":"none"},"request_id":"abc12345","missing_slots":[],"trace":"Request ID: abc12345",'
+                        '"next_action":"none"},"execution_id":"abc12345","missing_slots":[],"trace":"Execution ID: abc12345",'
                         '"debug":null,"upload_manifest":null}\n\n'
                         'event: done\ndata: {}\n\n'
                     ),
@@ -157,9 +157,9 @@ async def run_agent_stream_api(
     request: Request,
     request_data: AgentRequest,
 ):
-    request_id = str(request.state.request_id)[:8]
+    execution_id = str(request.state.execution_id)
     stream = request.app.state.agent_request_service.stream(
-        request_id=request_id,
+        execution_id=execution_id,
         request_data=request_data,
     )
 

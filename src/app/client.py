@@ -78,7 +78,7 @@ class AgentTransportObservation:
     """Transport facts captured at reception, before final-answer validation."""
 
     http_status: int | None = None
-    request_id: str | None = None
+    execution_id: str | None = None
     elapsed_ms: float = 0
     stream_opened: bool = False
     final_received: bool = False
@@ -135,7 +135,7 @@ def stream_agent_response(
         ) as resp:
             observation = replace(
                 observation, http_status=resp.status_code,
-                request_id=resp.headers.get("x-request-id") or resp.headers.get("X-Request-ID"),
+                execution_id=resp.headers.get("x-execution-id") or resp.headers.get("X-Execution-ID"),
             )
             if resp.status_code != 200:
                 observation = replace(observation, http_body=resp.text)
@@ -177,8 +177,8 @@ def stream_agent_response(
                                             exception_type=type(exc).__name__, exception_detail=str(exc)),
                     )
                     return
-                if event.event in {"request_started", "final_response"} and not observation.request_id:
-                    observation = replace(observation, request_id=event.data["request_id"])
+                if event.event in {"request_started", "final_response"} and not observation.execution_id:
+                    observation = replace(observation, execution_id=event.data["execution_id"])
                     event = replace(event, observation=observation)
                 saw_error = saw_error or event.event == "error"
                 yield event

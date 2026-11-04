@@ -17,24 +17,24 @@ class ProgressEmitter:
         self,
         *,
         publish: PublishProgressEvent,
-        request_id: str,
+        execution_id: str,
         session_id: str,
     ) -> None:
         self._publish = publish
-        self._request_id = str(request_id)
+        self._execution_id = str(execution_id)
         self._session_id = str(session_id)
         self._current_stage: StageName | None = None
         self._current_stage_started = 0.0
 
     @property
-    def request_id(self) -> str:
-        return self._request_id
+    def execution_id(self) -> str:
+        return self._execution_id
 
     def emit_request_started(self) -> None:
         self._publish(
             "request_started",
             {
-                "request_id": self._request_id,
+                "execution_id": self._execution_id,
                 "session_id": self._session_id,
             },
         )

@@ -51,10 +51,8 @@ class ExecutionRunner:
             progress_emitter=progress_emitter,
             memory_summary=conversation.memory_summary,
             session_metadata=self.session.snapshot_session_metadata(),
-            previous_response=(self.session.previous_response.model_copy(deep=True)
-                               if self.session.previous_response is not None else None),
-            pending_request=(self.session.pending_request.model_copy(deep=True)
-                            if self.session.pending_request is not None else None),
+            previous_response=self.session.previous_response,
+            pending_request=self.session.pending_request,
             answer_export_operations=dict(self.session.answer_export_operations),
         )
 

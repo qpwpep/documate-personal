@@ -12,8 +12,8 @@ from src.core.contracts.tool_execution import ToolExecutionEvent, ToolExecutionE
 
 
 class ToolExecutionRecorder:
-    def __init__(self, request_id: str | None = None):
-        self.request_id = request_id or uuid4().hex
+    def __init__(self, execution_id: str | None = None):
+        self.execution_id = execution_id or uuid4().hex
         self._events: list[ToolExecutionEvent] = []
         self._open: set[str] = set()
         self._lock = Lock()
@@ -35,7 +35,7 @@ class ToolExecutionRecorder:
     def snapshot(self) -> ToolExecutionEvidence:
         with self._lock:
             missing_origin = any(event.phase == "reused" and not event.origin_invocation_id for event in self._events)
-            return ToolExecutionEvidence(schema_version=1, request_id=self.request_id,
+            return ToolExecutionEvidence(schema_version=1, execution_id=self.execution_id,
                                          status="incomplete" if self._open or missing_origin else "complete",
                                          events=list(self._events))
 
@@ -44,8 +44,8 @@ _recorder: ContextVar[ToolExecutionRecorder | None] = ContextVar("tool_execution
 
 
 @contextmanager
-def capture_tool_execution(request_id: str | None = None) -> Iterator[ToolExecutionRecorder]:
-    recorder = ToolExecutionRecorder(request_id)
+def capture_tool_execution(execution_id: str | None = None) -> Iterator[ToolExecutionRecorder]:
+    recorder = ToolExecutionRecorder(execution_id)
     token = _recorder.set(recorder)
     try:
         yield recorder
@@ -67,11 +67,11 @@ def record_nonexecution(tool_name: str, *, phase: str = "blocked", reason_code: 
 
 
 def invoke_tool(tool_name: str, implementation: Callable[..., Any], *,
-                execution_id: str | None = None, **kwargs: Any) -> Any:
+                invocation_id: str | None = None, **kwargs: Any) -> Any:
     recorder = _recorder.get()
     if recorder is None:
         return implementation(**kwargs)
-    invocation_id = recorder.record(tool_name, "started", invocation_id=execution_id)
+    invocation_id = recorder.record(tool_name, "started", invocation_id=invocation_id)
     try:
         result = implementation(**kwargs)
         if tool_name in {"tavily_search", "upload_search"}:

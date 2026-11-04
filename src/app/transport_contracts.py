@@ -9,15 +9,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic.json_schema import GenerateJsonSchema, models_json_schema
 from pydantic_core import core_schema
 
-from src.core.contracts.debug import ActionResults, ErrorCode, PlannerDiagnostic, RetryState, RetrievalDiagnostic
+from src.core.contracts.debug import DebugPayload
+from src.core.answer_schema.wire import SerializedAnswer
 from src.core.contracts.outcome import AgentCallResult
-from src.core.contracts.provenance import AnswerProvenance
-from src.core.contracts.routing import RoutingDecision
-from src.core.contracts.tool_execution import ToolExecutionEvidence
-from src.core.contracts.usage import LLMCallRecord
-from src.core.evidence import SearchHit
-from src.core.latency import LatencyBreakdownModel, StageName
-from src.core.llm_errors import LLMDiagnostic
+from src.core.latency import StageName
 
 
 class HTTPResponseSchema(GenerateJsonSchema):
@@ -33,36 +28,12 @@ class HTTPResponseSchema(GenerateJsonSchema):
         return super().field_is_required(field, total)
 
 
-class AgentDebugInfo(BaseModel):
-    schema_version: int = Field(strict=True)
-    observability_status: Literal["ok", "degraded", "failed"]
-    missing_required_debug_fields: list[str] = Field(default_factory=list)
-    tool_calls: list[str] = Field(default_factory=list)
-    tool_call_count: int = 0
-    execution_evidence: ToolExecutionEvidence | None = None
-    latency_ms_server: int | None = None
-    latency_breakdown: LatencyBreakdownModel | None = None
-    llm_calls: list[LLMCallRecord] | None = None
-    llm_diagnostics: list[LLMDiagnostic] = Field(default_factory=list)
-    errors: list[str] = Field(default_factory=list)
-    error_codes: list[ErrorCode] = Field(default_factory=list)
-    validation_events: list[str] = Field(default_factory=list)
-    route_decisions: list[RoutingDecision]
-    memory_compactions: list[dict[str, Any]] = Field(default_factory=list)
-    planner_errors: list[str] = Field(default_factory=list)
-    observed_hits: list[SearchHit] = Field(default_factory=list)
-    answer_provenance: AnswerProvenance | None = None
-    retry_context: RetryState | None = None
-    retrieval_diagnostics: list[RetrievalDiagnostic] = Field(default_factory=list)
-    planner_diagnostics: PlannerDiagnostic | None = None
-    action_results: ActionResults | None = None
-
-
 class AgentResponse(AgentCallResult):
     model_config = ConfigDict(extra="forbid")
 
+    response: SerializedAnswer | None = None
     trace: str
-    debug: AgentDebugInfo | None = None
+    debug: DebugPayload | None = None
 
 
 AgentStreamEventName = Literal[
@@ -92,7 +63,7 @@ _INTEGER_SCHEMA = {"type": "integer"}
 # final_response refers to the same runtime model used by response assembly.
 AGENT_STREAM_EVENT_SCHEMAS = {
     "request_started": _event_data_schema(
-        ["request_id", "session_id"], request_id=_STRING_SCHEMA, session_id=_STRING_SCHEMA,
+        ["execution_id", "session_id"], execution_id=_STRING_SCHEMA, session_id=_STRING_SCHEMA,
     ),
     "stage_started": _event_data_schema(
         ["stage", "attempt"], stage=_STREAM_STAGE_SCHEMA, attempt=_INTEGER_SCHEMA,
@@ -102,7 +73,7 @@ AGENT_STREAM_EVENT_SCHEMAS = {
         latency_ms=_INTEGER_SCHEMA, status=_STRING_SCHEMA,
     ),
     "heartbeat": _event_data_schema(
-        ["request_id", "elapsed_ms"], request_id=_STRING_SCHEMA, elapsed_ms=_INTEGER_SCHEMA,
+        ["execution_id", "elapsed_ms"], execution_id=_STRING_SCHEMA, elapsed_ms=_INTEGER_SCHEMA,
     ),
     "progress_snapshot": _event_data_schema(
         ["stage", "summary"], stage=_STREAM_STAGE_SCHEMA, summary=_STRING_SCHEMA,

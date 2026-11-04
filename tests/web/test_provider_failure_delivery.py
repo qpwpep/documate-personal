@@ -113,8 +113,9 @@ def test_provider_schema_rejection_preserves_session_without_committing_an_answe
     assert final.result.problem.next_action == "fix_configuration"
     assert final.result.response is None
     assert final.result.upload_manifest == manifest
-    assert final.result.request_id == events[0].data["request_id"]
-    assert final.result.request_id
+    assert final.result.execution_id == events[0].data["execution_id"]
+    assert final.result.execution_id == final.observation.execution_id
+    assert len(final.result.execution_id) == 36
     assert final.data["debug"] is None
     assert len(provider_requests) == 1
     assert session.snapshot_conversation_memory() == before
@@ -209,5 +210,5 @@ def test_stream_stays_connected_through_validation_and_session_lock(agent_server
     final = next(event for event in events if event.event == "final_response")
     assert final.result.status == "completed"
     assert final.result.upload_manifest == manifest
-    assert all(event.data["request_id"] == final.result.request_id for event in heartbeats)
+    assert all(event.data["execution_id"] == final.result.execution_id for event in heartbeats)
     assert final.result.response.content.blocks[0].content[0].text == "대기 후 받은 답변입니다."

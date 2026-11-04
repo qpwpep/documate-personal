@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import RoutingDecision
@@ -13,6 +13,8 @@ from src.core.contracts.usage import (
 from src.core.slack_contract import SlackDelivery
 from src.core.planner_schema import RetrievalTask
 from src.core.evidence import SearchHit
+from src.core.latency import LatencyBreakdownModel
+from src.core.llm_errors import LLMDiagnostic
 
 ErrorCode = Literal[
     "provider_schema_invalid", "provider_configuration", "provider_unavailable", "provider_rate_limited",
@@ -230,6 +232,15 @@ class DebugDiagnostics(BaseModel):
     action_results: ActionResults | None = None
 
 class DebugPayload(DebugDiagnostics):
+    """Completed observations shared by runtime, HTTP, and evaluation."""
+
+    model_config = ConfigDict(validate_assignment=True)
+    schema_version: int = Field(default=DEBUG_SCHEMA_VERSION, strict=True)
+    execution_evidence: ToolExecutionEvidence | None = None
+    latency_ms_server: int | None = None
+    latency_breakdown: LatencyBreakdownModel | None = None
+    llm_diagnostics: list[LLMDiagnostic] = Field(default_factory=list)
+    observed_hits: list[SearchHit] = Field(default_factory=list)
     route_decisions: list[RoutingDecision] = Field(default_factory=list)
 
 

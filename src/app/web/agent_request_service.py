@@ -13,10 +13,9 @@ from src.infra.logging_utils import log_event
 from src.runtime.progress import ProgressEmitter
 from src.app.web.agent_request_support import build_session_metadata_snapshot, build_debug_info
 from src.app.web.cleanup import RuntimeCleaner
-from src.app.transport_contracts import AgentDebugInfo, AgentResponse, AgentStreamEvent
+from src.app.transport_contracts import AgentResponse, AgentStreamEvent
 from src.app.web.schemas import AgentRequest
-from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
-from src.core.contracts.outcome import TurnResult
+from src.core.contracts.debug import DebugPayload
 from src.core.llm_errors import ExecutionProblem, LLMCallError, make_problem
 from src.core.uploads import UploadManifest
 from src.app.web.session_store import InMemorySessionStore
@@ -49,7 +48,7 @@ class AgentRequestService:
     def stream(
         self,
         *,
-        request_id: str,
+        execution_id: str,
         request_data: AgentRequest,
     ) -> AsyncIterator[AgentStreamEvent]:
         event_queue: Queue[AgentStreamEvent] = Queue()
@@ -60,7 +59,7 @@ class AgentRequestService:
 
         progress_emitter = ProgressEmitter(
             publish=publish,
-            request_id=request_id,
+            execution_id=execution_id,
             session_id=request_data.session_id,
         )
         progress_emitter.emit_request_started()
@@ -68,7 +67,7 @@ class AgentRequestService:
         def worker() -> None:
             try:
                 result = self._execute_request(
-                    request_id=request_id,
+                    execution_id=execution_id,
                     request_data=request_data,
                     progress_emitter=progress_emitter,
                 )
@@ -77,14 +76,14 @@ class AgentRequestService:
                 # Infrastructure outside the runtime must obey the same terminal
                 # contract. Only safe structured diagnostics cross this boundary.
                 progress_emitter.emit_final_response(_failure_response(
-                    request_id=request_id, error=exc, include_debug=request_data.include_debug,
+                    execution_id=execution_id, error=exc, include_debug=request_data.include_debug,
                 ).model_dump(mode="json"))
             finally:
                 progress_emitter.emit_done()
 
         Thread(
             target=worker,
-            name=f"agent-stream-{request_id}",
+            name=f"agent-stream-{execution_id}",
             daemon=True,
         ).start()
 
@@ -96,7 +95,7 @@ class AgentRequestService:
                     # Keep the connection alive even before the graph starts.
                     # This does not extend model deadlines or retry execution.
                     yield AgentStreamEvent(event="heartbeat", data={
-                        "request_id": request_id,
+                        "execution_id": execution_id,
                         "elapsed_ms": round((time.monotonic() - started) * 1000),
                     })
                     continue
@@ -109,7 +108,7 @@ class AgentRequestService:
     def _execute_request(
         self,
         *,
-        request_id: str,
+        execution_id: str,
         request_data: AgentRequest,
         progress_emitter: ProgressEmitter | None,
     ) -> AgentResponse:
@@ -123,7 +122,7 @@ class AgentRequestService:
             logging.INFO,
             "agent_request",
             session_id=session_id[:8],
-            request_id=request_id,
+            execution_id=execution_id,
             **_query_log_fields(user_query),
         )
 
@@ -140,19 +139,19 @@ class AgentRequestService:
                         session.require_upload_context(request_data.uploads)
                     except ValueError:
                         return _failure_response(
-                            request_id=request_id, upload_manifest=session.upload_manifest(),
+                            execution_id=execution_id, upload_manifest=session.upload_manifest(),
                             problem=make_problem("upload_revision_conflict", "request"),
                         )
                     session.session_id = session_id
                     agent_manager.set_session_metadata(session_metadata)
                     agent_answer = agent_manager.run_agent_flow(user_query, progress_emitter=progress_emitter)
-                    outcome = _build_response_payload(agent_answer, request_id=request_id)
+                    outcome = agent_answer.outcome
                 finally:
                     # Capture even failures while holding the lock; a concurrent
                     # upload mutation must not change this request's snapshot.
                     upload_manifest = session.upload_manifest()
         except Exception as exc:
-            return _failure_response(request_id=request_id, upload_manifest=upload_manifest,
+            return _failure_response(execution_id=execution_id, upload_manifest=upload_manifest,
                                      error=exc, include_debug=request_data.include_debug)
         latency_ms_server = int((time.monotonic() - started) * 1000)
 
@@ -160,7 +159,7 @@ class AgentRequestService:
         if request_data.include_debug:
             try:
                 debug_info = build_debug_info(
-                    raw_debug=agent_answer.get("debug"),
+                    debug=agent_answer.debug,
                     latency_ms_server=latency_ms_server,
                     answer_expected=outcome.response is not None,
                 )
@@ -168,9 +167,9 @@ class AgentRequestService:
                 # Observability failure must not replace a checked answer or discard
                 # the manifest captured at its completion.
                 log_event(logger, logging.ERROR, "debug_normalization_failure",
-                          request_id=request_id, exception_type=type(exc).__name__)
-                debug_info = AgentDebugInfo(
-                    schema_version=DEBUG_SCHEMA_VERSION, observability_status="failed", route_decisions=[],
+                          execution_id=execution_id, exception_type=type(exc).__name__)
+                debug_info = DebugPayload(
+                    observability_status="failed", route_decisions=[],
                     missing_required_debug_fields=["debug"], error_codes=["DEBUG_NORMALIZATION_FAILED"],
                     latency_ms_server=latency_ms_server,
                 )
@@ -180,7 +179,7 @@ class AgentRequestService:
             logging.INFO,
             "agent_response",
             session_id=session_id[:8],
-            request_id=request_id,
+            execution_id=execution_id,
             agent_id=id(agent_manager),
             latency_ms_server=latency_ms_server,
             session_lock_wait_ms=session_lock_wait_ms,
@@ -190,22 +189,17 @@ class AgentRequestService:
         )
 
         return AgentResponse(
-            **outcome.model_dump(mode="json"),
-            trace=f"Session ID: {session_id}, Request ID: {request_id}, Agent ID: {id(agent_manager)}",
+            status=outcome.status, response=outcome.response, answer_id=outcome.answer_id,
+            message=outcome.message, problem=outcome.problem, execution_id=execution_id,
+            missing_slots=outcome.missing_slots,
+            trace=f"Session ID: {session_id}, Execution ID: {execution_id}, Agent ID: {id(agent_manager)}",
             upload_manifest=upload_manifest,
             debug=debug_info,
         )
 
 
-def _build_response_payload(agent_answer: dict[str, Any], *, request_id: str) -> TurnResult:
-    return TurnResult.model_validate({
-        **{key: value for key, value in agent_answer.items() if key in TurnResult.model_fields},
-        "request_id": request_id,
-    })
-
-
 def _failure_response(
-    *, request_id: str, upload_manifest: UploadManifest | None = None,
+    *, execution_id: str, upload_manifest: UploadManifest | None = None,
     problem: ExecutionProblem | None = None, error: Exception | None = None,
     include_debug: bool = False,
 ) -> AgentResponse:
@@ -214,17 +208,17 @@ def _failure_response(
     problem = problem or make_problem("internal_error", "request")
     log_event(
         logger, logging.WARNING if problem.code == "upload_revision_conflict" else logging.ERROR,
-        "agent_request_failure", request_id=request_id, code=problem.code, stage=problem.stage,
+        "agent_request_failure", execution_id=execution_id, code=problem.code, stage=problem.stage,
         exception_type=type(error).__name__ if error else None,
         llm_diagnostic=error.diagnostic.model_dump(mode="json", exclude_none=True)
         if isinstance(error, LLMCallError) else None,
     )
     return AgentResponse(
         status="refused" if problem.code == "model_refusal" else "failed",
-        request_id=request_id, response=None, problem=problem, message=problem.message,
-        trace=f"Request ID: {request_id}", upload_manifest=upload_manifest,
-        debug=AgentDebugInfo(
-            schema_version=DEBUG_SCHEMA_VERSION, observability_status="failed", route_decisions=[],
+        execution_id=execution_id, response=None, problem=problem, message=problem.message,
+        trace=f"Execution ID: {execution_id}", upload_manifest=upload_manifest,
+        debug=DebugPayload(
+            observability_status="failed", route_decisions=[],
             llm_diagnostics=[error.diagnostic] if isinstance(error, LLMCallError) else [],
         ) if include_debug else None,
     )

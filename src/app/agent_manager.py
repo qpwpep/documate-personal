@@ -15,11 +15,13 @@ from src.core.answer_schema.rendering import render_answer_text
 from src.core.request_contracts import required_contract_turn_ids
 from src.core.contracts import GraphState, SessionMetadata
 from src.core.contracts.outcome import TurnResult
+from src.core.contracts.execution_result import AgentExecutionResult
 from src.core.llm_errors import LLMCallError, ExecutionProblem, LLMDiagnostic, make_problem
 from src.infra.llm_boundary import capture_llm_diagnostics, check_request_deadline, request_deadline
-from src.core.contracts.debug import DEBUG_SCHEMA_VERSION
+from src.core.contracts.debug import DebugPayload, ErrorCode
 from src.core.contracts.provenance import AnswerProvenance
-from src.core.contracts.routing import validate_route_decisions
+from src.core.contracts.routing import RoutingDecision, validate_route_decisions
+from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.contracts.boundary.response import get_response_state
 from src.runtime.graph_builder import StageExecutionError, build_agent_graph
@@ -73,33 +75,17 @@ class AgentFlowManager:
         self.session.close()
 
     @staticmethod
-    def _early_result(outcome: TurnResult) -> dict[str, Any]:
+    def _early_result(outcome: TurnResult) -> AgentExecutionResult:
         result = outcome.response
-        return {
-            **outcome.model_dump(mode="json"),
-            "debug": {
-                "schema_version": DEBUG_SCHEMA_VERSION,
-                "observability_status": "ok",
-                "missing_required_debug_fields": [],
-                "tool_calls": [],
-                "tool_call_count": 0,
-                "llm_calls": [],
-                "errors": [],
-                "error_codes": [],
-                "validation_events": [],
-                "route_decisions": [],
-                "memory_compactions": [],
-                "planner_errors": [],
-                "observed_hits": [],
-                "answer_provenance": AnswerProvenance(
+        return AgentExecutionResult(
+            outcome=outcome,
+            debug=DebugPayload(
+                llm_calls=[],
+                answer_provenance=AnswerProvenance(
                     body_kind="acknowledge", response_hash=result.content_hash, evidence_packet=[],
-                ).model_dump(mode="json") if result is not None else None,
-                "retry_context": None,
-                "retrieval_diagnostics": [],
-                "planner_diagnostics": None,
-                "latency_breakdown": None,
-            },
-        }
+                ) if result is not None else None,
+            ),
+        )
 
     @staticmethod
     def _error_payload(
@@ -110,33 +96,18 @@ class AgentFlowManager:
         graph_state: GraphState | None = None,
         problem: ExecutionProblem | None = None,
         diagnostic: LLMDiagnostic | None = None,
-    ) -> dict[str, Any]:
-        debug = graph_state.get("debug") if graph_state is not None else None
-        raw_trace = (
-            debug.get("latency_trace", []) if isinstance(debug, dict)
-            else getattr(debug, "latency_trace", [])
-        )
+    ) -> AgentExecutionResult:
+        debug = get_debug_state(graph_state or {})
+        raw_trace = list(debug.latency_trace)
         latency_errors: list[str] = []
-        if isinstance(raw_trace, list):
-            raw_trace = list(raw_trace)
-        elif stage_error is not None:
-            latency_errors.append("latency_trace must be a list")
-            raw_trace = []
-        memory_compactions = (
-            debug.get("memory_compactions", []) if isinstance(debug, dict)
-            else getattr(debug, "memory_compactions", [])
-        )
-        route_decisions: list[dict[str, Any]] = []
+        route_decisions: list[RoutingDecision] = []
         missing_debug_fields: list[str] = []
         problem = problem or make_problem("internal_error", stage_error.stage if stage_error else "request")
         errors = [problem.code]
-        error_codes: list[str] = [problem.code]
+        error_codes: list[ErrorCode] = [problem.code]
         if graph_state is not None:
             try:
-                route_decisions = [
-                    decision.model_dump(mode="json")
-                    for decision in validate_route_decisions(graph_state.get("route_decisions"))
-                ]
+                route_decisions = validate_route_decisions(graph_state.get("route_decisions"))
             except ValueError as exc:
                 missing_debug_fields.append("route_decisions")
                 errors.append("Invalid committed route_decisions")
@@ -161,50 +132,35 @@ class AgentFlowManager:
             missing_debug_fields.append("latency_breakdown")
             if "DEBUG_NORMALIZATION_FAILED" not in error_codes:
                 error_codes.append("DEBUG_NORMALIZATION_FAILED")
-        return {
-            **TurnResult(status="refused" if problem.code == "model_refusal" else "failed",
-                         message=problem.message, problem=problem).model_dump(mode="json"),
-            "debug": {
-                "schema_version": DEBUG_SCHEMA_VERSION,
-                "observability_status": "failed",
-                "missing_required_debug_fields": missing_debug_fields,
-                "tool_calls": [],
-                "tool_call_count": 0,
-                "llm_calls": [],
-                "llm_diagnostics": [diagnostic.model_dump(mode="json")] if diagnostic else [],
-                "errors": errors,
-                "error_codes": error_codes,
-                "validation_events": [],
-                "route_decisions": route_decisions,
-                "memory_compactions": memory_compactions,
-                "planner_errors": [],
-                "observed_hits": [],
-                "answer_provenance": None,
-                "retry_context": None,
-                "retrieval_diagnostics": [],
-                "planner_diagnostics": None,
-                "latency_breakdown": latency_breakdown.model_dump(mode="json"),
-            },
-        }
+        return AgentExecutionResult(
+            outcome=TurnResult(status="refused" if problem.code == "model_refusal" else "failed",
+                               message=problem.message, problem=problem),
+            debug=DebugPayload(
+                observability_status="failed", missing_required_debug_fields=missing_debug_fields,
+                llm_calls=[], llm_diagnostics=[diagnostic] if diagnostic else [],
+                errors=errors, error_codes=error_codes, route_decisions=route_decisions,
+                memory_compactions=list(debug.memory_compactions), latency_breakdown=latency_breakdown,
+            ),
+        )
 
     def run_agent_flow(
         self,
         user_input: str,
         *,
         progress_emitter: ProgressEmitter | None = None,
-    ) -> dict[str, Any]:
-        with (capture_tool_execution(progress_emitter.request_id if progress_emitter is not None else None) as recorder,
+    ) -> AgentExecutionResult:
+        with (capture_tool_execution(progress_emitter.execution_id if progress_emitter is not None else None) as recorder,
               capture_llm_usage() as usage_recorder, capture_llm_diagnostics() as diagnostics,
               request_deadline(self.settings.request_timeout_seconds)):
             result = self._run_agent_flow(user_input, progress_emitter=progress_emitter)
             evidence = recorder.snapshot()
-            debug = result["debug"]
-            debug["llm_calls"] = [call.model_dump(mode="json") for call in usage_recorder.snapshot()]
-            debug["llm_diagnostics"] = [entry.model_dump(mode="json") for entry in diagnostics] or debug.get("llm_diagnostics", [])
-            result["request_id"] = progress_emitter.request_id if progress_emitter is not None else ""
-            debug["execution_evidence"] = evidence.model_dump(mode="json")
-            debug["tool_calls"] = [event.tool_name for event in evidence.events if event.phase == "started"]
-            debug["tool_call_count"] = len(debug["tool_calls"])
+            debug = result.debug
+            debug.llm_calls = usage_recorder.snapshot()
+            debug.llm_diagnostics = list(diagnostics) or debug.llm_diagnostics
+            result.outcome.execution_id = progress_emitter.execution_id if progress_emitter is not None else ""
+            debug.execution_evidence = evidence
+            debug.tool_calls = [event.tool_name for event in evidence.events if event.phase == "started"]
+            debug.tool_call_count = len(debug.tool_calls)
             return result
 
     def _run_agent_flow(
@@ -212,7 +168,7 @@ class AgentFlowManager:
         user_input: str,
         *,
         progress_emitter: ProgressEmitter | None = None,
-    ) -> dict[str, Any]:
+    ) -> AgentExecutionResult:
         flow_started = time.perf_counter()
         if is_session_reset_command(user_input):
             self.close()
@@ -232,29 +188,33 @@ class AgentFlowManager:
             updated_messages = list(response["messages"])
             final_runtime = get_runtime_state(response)
             candidate_summary = final_runtime.memory_summary
-            debug_info = self._debug_collector.build(
-                response=response,
-                graph_total_ms=graph_total_ms,
-            )
-            assembled_response = self._response_assembler.assemble(
-                response=response,
-                debug_info=debug_info,
-            )
+            try:
+                debug_info = self._debug_collector.build(response=response, graph_total_ms=graph_total_ms)
+            except (TypeError, ValueError) as exc:
+                # An observation failure must not discard an already checked answer.
+                log_event(logger, logging.ERROR, "debug_normalization_failure", exception_type=type(exc).__name__)
+                debug_info = DebugPayload(
+                    observability_status="failed", missing_required_debug_fields=["debug"],
+                    error_codes=["DEBUG_NORMALIZATION_FAILED"],
+                )
+            outcome = self._response_assembler.assemble(response=response)
+            if outcome.response is None:
+                debug_info.answer_provenance = None
+            assembled_response = AgentExecutionResult(outcome=outcome, debug=debug_info)
             check_request_deadline("response_assembly")
             final_response_state = get_response_state(response)
-            if assembled_response["status"] in {"failed", "refused"}:
+            if outcome.status in {"failed", "refused"}:
                 return assembled_response
-            canonical_text = (assembled_response["message"] if assembled_response["status"] == "needs_input"
+            canonical_text = (outcome.message if outcome.status == "needs_input"
                               else render_answer_text(final_response_state.result))
-            if (assembled_response["status"] == "partial"
-                    and assembled_response["problem"]["code"] == "save_failed"):
-                canonical_text = "\n\n".join([canonical_text, assembled_response["message"]])
-            elif assembled_response["status"] == "partial":
+            if outcome.status == "partial" and outcome.problem.code == "save_failed":
+                canonical_text = "\n\n".join([canonical_text, outcome.message])
+            elif outcome.status == "partial":
                 # Retain what the user actually saw, including its limits. The
                 # answer reference below remains the original checked document;
                 # recording it is not a promotion of the failed request.
                 limitations = list(dict.fromkeys([
-                    assembled_response["message"],
+                    outcome.message,
                     *(issue.message for issue in final_response_state.result.issues),
                 ]))
                 canonical_text = "\n\n".join([
@@ -286,13 +246,13 @@ class AgentFlowManager:
             self.session.commit_response_state(
                 response=final_response_state.result,
                 response_kind=final_response_state.kind,
-                displayed_partial=assembled_response["status"] == "partial" and not answer_reuse_failed,
+                displayed_partial=outcome.status == "partial" and not answer_reuse_failed,
                 pending_request=final_runtime.pending_request,
+                export_operations=final_runtime.answer_export_operations,
             )
-            self.session.answer_export_operations.update(final_runtime.answer_export_operations)
-            if (not answer_reuse_failed and assembled_response["response"] is not None
+            if (not answer_reuse_failed and outcome.response is not None
                     and final_response_state.result.content.blocks):
-                assembled_response["answer_id"] = self.session.register_answer(final_response_state.result)
+                outcome.answer_id = self.session.register_answer(final_response_state.result)
             return assembled_response
 
         except Exception as exc:
@@ -320,29 +280,29 @@ class AgentFlowManager:
                 graph_state=response,
             )
             if problem.code == "request_timeout" and response is not None:
-                self._retain_timed_out_delivery(result, response, problem)
+                return self._retain_timed_out_delivery(result, response, problem)
             return result
 
     def _retain_timed_out_delivery(
-        self, result: dict[str, Any], state: GraphState, problem: ExecutionProblem,
-    ) -> None:
+        self, result: AgentExecutionResult, state: GraphState, problem: ExecutionProblem,
+    ) -> AgentExecutionResult:
         response = get_response_state(state)
         if not any(receipt.invocation_id and receipt.status != "skipped" for receipt in response.result.actions):
-            return
+            return result
         runtime = get_runtime_state(state)
         # A completed or uncertain external effect must remain visible and must
         # not become a fresh delivery on a follow-up. This is delivery bookkeeping,
         # not a successful conversation/answer commit for the timed-out request.
-        self.session.pending_request = (
-            runtime.pending_request.model_copy(deep=True) if runtime.pending_request is not None else None
+        self.session.commit_delivery_state(
+            pending_request=runtime.pending_request, export_operations=runtime.answer_export_operations,
         )
-        self.session.answer_export_operations.update(runtime.answer_export_operations)
-        result.update(TurnResult(
-            status="partial", response=response.result, problem=problem, message=problem.message,
-        ).model_dump(mode="json"))
-        result["debug"]["answer_provenance"] = AnswerProvenance(
+        result.debug.answer_provenance = AnswerProvenance(
             request_id=response.request_id, contract_revision=response.contract_revision,
             save_operation_binding_sha256=response.save_operation_binding_sha256,
             body_kind=response.body_kind, response_hash=response.result.content_hash,
             source=response.evidence_source, evidence_packet=response.evidence_packet,
-        ).model_dump(mode="json") if response.body_kind is not None else None
+        ) if response.body_kind is not None else None
+        return AgentExecutionResult(
+            outcome=TurnResult(status="partial", response=response.result, problem=problem, message=problem.message),
+            debug=result.debug,
+        )

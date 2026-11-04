@@ -42,7 +42,7 @@ def test_output_defaults_do_not_change_optional_request_fields() -> None:
     assert "include_debug" not in schemas["AgentRequest"]["required"]
     assert "add" not in schemas["BrowserUploadSyncRequest"]["required"]
     assert {"selector", "failure"} <= set(schemas["SlackDefault"]["required"])
-    assert {"actions", "content_hash", "semantic_validation"} <= set(schemas["AnswerResponse"]["required"])
+    assert {"actions", "content_hash", "semantic_validation", "sources"} <= set(schemas["SourcedAnswerPayload"]["required"])
 
 
 def test_python_transport_schema_matches_generated_openapi_response_schemas() -> None:
@@ -235,15 +235,15 @@ def test_python_client_rejects_extra_final_response_fields_without_filtering(
     assert client.manifest is None
 
 
-def test_python_client_preserves_valid_progress_and_request_identity(
+def test_python_client_preserves_valid_progress_and_execution_identity(
     responses: dict[str, dict[str, object]],
     http_response: Callable[[bytes], list[requests.PreparedRequest]],
 ) -> None:
     progress = [
-        ("request_started", {"request_id": "stream-request", "session_id": "contract-session"}),
+        ("request_started", {"execution_id": "stream-request", "session_id": "contract-session"}),
         ("stage_started", {"stage": "planner", "attempt": 1}),
         ("stage_completed", {"stage": "planner", "attempt": 1, "latency_ms": 12, "status": "completed"}),
-        ("heartbeat", {"request_id": "stream-request", "elapsed_ms": 15}),
+        ("heartbeat", {"execution_id": "stream-request", "elapsed_ms": 15}),
         ("progress_snapshot", {"stage": "synthesis", "summary": "답변을 작성하고 있습니다."}),
     ]
     expected = [*progress, ("final_response", responses["completed"])]
@@ -260,7 +260,7 @@ def test_python_client_preserves_valid_progress_and_request_identity(
 
     assert len(sent) == 1
     assert [(event.event, event.data) for event in events] == expected
-    assert all(event.observation.request_id == "stream-request" for event in events)
+    assert all(event.observation.execution_id == "stream-request" for event in events)
     assert events[-1].result.status == "completed"
 
 

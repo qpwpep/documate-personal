@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from src.core.answer_schema import AnswerResponse
+from src.core.answer_schema import ActionReceipt, AnswerResponse
 from src.core.llm_errors import ExecutionProblem
 from src.core.uploads import UploadManifest
 
@@ -17,7 +17,7 @@ class TurnResult(BaseModel):
     answer_id: str | None = Field(default=None, min_length=1)
     message: str = ""
     problem: ExecutionProblem | None = None
-    request_id: str = Field(default="", description="ID of this execution, not the domain request ID.")
+    execution_id: str = Field(default="", description="ID of this execution, not the domain request ID.")
     missing_slots: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -56,20 +56,19 @@ class AgentCallResult(TurnResult):
 
 
 class AnswerExportResult(BaseModel):
-    """A saved answer retains its body even when the filesystem operation fails."""
+    """An export reports its receipt while the displayed answer retains its body."""
     model_config = ConfigDict(extra="forbid")
     status: Literal["completed", "failed"]
     answer_id: str = Field(min_length=1)
-    request_id: str = Field(min_length=1, description="ID of this export execution, renewed on retry.")
-    response: AnswerResponse
+    execution_id: str = Field(min_length=1, description="ID of this export execution, renewed on retry.")
+    receipt: ActionReceipt
     message: str
 
     @model_validator(mode="after")
     def verified_completion(self) -> "AnswerExportResult":
-        receipts = [receipt for receipt in self.response.actions if receipt.kind == "save_text"]
-        if len(receipts) != 1:
-            raise ValueError("answer export requires exactly one save receipt")
-        receipt = receipts[0]
+        receipt = self.receipt
+        if receipt.kind != "save_text":
+            raise ValueError("answer export requires a save receipt")
         complete = (receipt.status == "success" and receipt.verification == "verified"
                     and receipt.artifact is not None and receipt.operation is not None)
         if (self.status == "completed") != complete:

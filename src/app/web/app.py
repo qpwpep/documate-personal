@@ -95,23 +95,24 @@ def create_app() -> FastAPI:
     app = FastAPI(lifespan=lifespan)
 
     @app.middleware("http")
-    async def add_request_id(request: Request, call_next):
-        request_id = str(uuid.uuid4())
-        request.state.request_id = request_id
+    async def add_execution_id(request: Request, call_next):
+        execution_id = str(uuid.uuid4())
+        request.state.execution_id = execution_id
         log_event(
             logger,
             logging.INFO,
             "incoming_request",
-            request_id=request_id[:8],
+            execution_id=execution_id,
             method=request.method,
             path=request.url.path,
         )
         response = await call_next(request)
+        response.headers["X-Execution-ID"] = execution_id
         log_event(
             logger,
             logging.INFO,
             "request_finished",
-            request_id=request_id[:8],
+            execution_id=execution_id,
             status_code=response.status_code,
         )
         return response

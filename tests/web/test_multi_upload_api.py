@@ -21,6 +21,7 @@ from openai import OpenAI
 
 from src.app.web.app import create_app
 from src.core.answer_schema import AnswerDocument, AnswerResponse
+from src.core.answer_schema.wire import SourcedAnswerPayload
 from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import WireRequestContract
 from src.infra.settings import AppSettings
@@ -179,7 +180,7 @@ def final_response(api, **kwargs):
 
 def answer(api, **kwargs):
     final = final_response(api, **kwargs)
-    return AnswerResponse.model_validate(final["response"])
+    return SourcedAnswerPayload.model_validate(final["response"]).to_answer()
 
 
 def test_invalid_internal_debug_preserves_the_answer_and_attachment_manifest(api, monkeypatch):
@@ -188,14 +189,14 @@ def test_invalid_internal_debug_preserves_the_answer_and_attachment_manifest(api
 
     def corrupt_observation(self, **kwargs):
         debug = build(self, **kwargs)
-        debug["observability_status"] = "unknown"
+        debug.observability_status = "unknown"
         return debug
 
     monkeypatch.setattr(DebugCollector, "build", corrupt_observation)
     final = final_response(api, uploads=context(current), include_debug=True)
 
     assert final["status"] == "completed"
-    assert AnswerResponse.model_validate(final["response"]).content.blocks
+    assert SourcedAnswerPayload.model_validate(final["response"]).to_answer().content.blocks
     assert final["upload_manifest"] == current
     assert final["debug"]["observability_status"] == "failed"
     assert final["debug"]["missing_required_debug_fields"] == ["debug"]
@@ -253,7 +254,7 @@ def test_configured_search_mode_reaches_http_answers_and_upload_index(api, expec
 
     final = final_response(api, query="첨부의 계약 갱신을 설명해줘", uploads=context(current), include_debug=True)
 
-    response = AnswerResponse.model_validate(final["response"])
+    response = SourcedAnswerPayload.model_validate(final["response"]).to_answer()
     assert {citation.evidence.snapshot.title for citation in response.citations} == {"contract.py"}
     hits = final["debug"]["observed_hits"]
     assert hits

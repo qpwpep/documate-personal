@@ -3,13 +3,14 @@ from __future__ import annotations
 import copy
 import logging
 from collections import OrderedDict
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 from uuid import uuid4
 from langchain_core.messages import HumanMessage
-from src.core.answer_schema import AnswerResponse
+from src.core.answer_schema import ActionReceipt, AnswerResponse
 from src.core.answer_schema.rendering import render_answer_text
 from src.core.answer_export import answer_export_key, answer_export_snapshot
 from src.core.save_contract import SaveOperation
@@ -18,7 +19,7 @@ from src.core.conversation_memory import extract_memory_text
 from src.core.uploads import UploadContext, UploadManifest, UploadRecord
 
 from src.core.contracts import SessionMetadata
-from src.core.contracts.graph_state import PendingRequest
+from src.core.pending_request import PendingRequest
 from src.core.contracts.boundary.runtime import parse_session_metadata
 from src.infra.logging_utils import log_event
 from src.infra.tools.local_rag import UploadedRetrieverHandle
@@ -50,10 +51,42 @@ class SessionContext:
         self._upload_records: tuple[UploadRecord, ...] = ()
         self._upload_storage: UploadStorage | None = None
         self.upload_operations: OrderedDict[str, str] = OrderedDict()
-        self.previous_response: AnswerResponse | None = None
-        self.pending_request: PendingRequest | None = None
+        self._previous_response: AnswerResponse | None = None
+        self._pending_request: PendingRequest | None = None
         self._answers: OrderedDict[str, AnswerResponse] = OrderedDict()
-        self.answer_export_operations: OrderedDict[str, SaveOperation] = OrderedDict()
+        self._answer_export_operations: OrderedDict[str, SaveOperation] = OrderedDict()
+
+    @property
+    def previous_response(self) -> AnswerResponse | None:
+        return self._previous_response.model_copy(deep=True) if self._previous_response is not None else None
+
+    @property
+    def pending_request(self) -> PendingRequest | None:
+        return self._pending_request.model_copy(deep=True) if self._pending_request is not None else None
+
+    @property
+    def answer_export_operations(self) -> Mapping[str, SaveOperation]:
+        return MappingProxyType(self._answer_export_operations)
+
+    def commit_previous_response(self, response: AnswerResponse | None) -> None:
+        self._previous_response = response.model_copy(deep=True) if response is not None else None
+
+    def commit_pending_request(self, pending_request: PendingRequest | None) -> None:
+        self._pending_request = pending_request.model_copy(deep=True) if pending_request is not None else None
+
+    def commit_delivery_state(
+        self, *, pending_request: PendingRequest | None, export_operations: Mapping[str, SaveOperation],
+    ) -> None:
+        self.commit_pending_request(pending_request)
+        for key, operation in export_operations.items():
+            self.remember_answer_export(key, operation)
+
+    def commit_answer_export(
+        self, answer: AnswerResponse, operation: SaveOperation, receipt: ActionReceipt,
+    ) -> None:
+        self.remember_answer_export(answer_export_key(answer), operation)
+        if self._pending_request is not None:
+            self.commit_pending_request(self._pending_request.complete_save(answer, operation, receipt))
 
     def register_answer(self, response: AnswerResponse) -> str:
         """Keep the exact displayed revision private for explicit future exports."""
@@ -61,7 +94,7 @@ class SessionContext:
         key = answer_export_key(snapshot)
         # The graph may have selected a newer generation already. A displayed
         # older receipt must never overwrite that current operation binding.
-        if key not in self.answer_export_operations:
+        if key not in self._answer_export_operations:
             body = render_answer_text(snapshot, include_sources=True).encode("utf-8-sig")
             for receipt in response.actions:
                 operation = receipt.operation
@@ -82,13 +115,13 @@ class SessionContext:
         return answer_id
 
     def remember_answer_export(self, key: str, operation: SaveOperation) -> None:
-        self.answer_export_operations[key] = operation
-        self.answer_export_operations.move_to_end(key)
+        self._answer_export_operations[key] = operation
+        self._answer_export_operations.move_to_end(key)
         self._trim_answer_exports()
 
     def _trim_answer_exports(self) -> None:
-        while len(self.answer_export_operations) > 200:
-            self.answer_export_operations.popitem(last=False)
+        while len(self._answer_export_operations) > 200:
+            self._answer_export_operations.popitem(last=False)
 
     def get_answer(self, answer_id: str) -> AnswerResponse | None:
         snapshot = self._answers.get(answer_id)
@@ -152,7 +185,7 @@ class SessionContext:
                         turn_id=message.id, text=extract_memory_text(message.content),
                     )
         if preserve_turn_ids is None:
-            preserve_turn_ids = required_contract_turn_ids(self.pending_request.contract) if self.pending_request is not None else ()
+            preserve_turn_ids = required_contract_turn_ids(self._pending_request.contract) if self._pending_request is not None else ()
         retained_ids = set(list(turns)[-16:]) | set(preserve_turn_ids)
         next_snapshot = ConversationMemorySnapshot(
             messages=tuple(cloned_messages),
@@ -163,10 +196,10 @@ class SessionContext:
 
     def reset_conversation_memory(self) -> None:
         self._conversation_memory = ConversationMemorySnapshot()
-        self.previous_response = None
-        self.pending_request = None
+        self._previous_response = None
+        self._pending_request = None
         self._answers.clear()
-        self.answer_export_operations.clear()
+        self._answer_export_operations.clear()
 
     def commit_response_state(
         self,
@@ -174,11 +207,12 @@ class SessionContext:
         response: AnswerResponse,
         response_kind: str,
         pending_request: PendingRequest | None,
+        export_operations: Mapping[str, SaveOperation] = MappingProxyType({}),
         displayed_partial: bool = False,
     ) -> None:
-        self.pending_request = pending_request.model_copy(deep=True) if pending_request is not None else None
+        self.commit_delivery_state(pending_request=pending_request, export_operations=export_operations)
         if response_kind == "answer" or displayed_partial:
-            self.previous_response = response.model_copy(deep=True)
+            self.commit_previous_response(response)
 
     def set_session_metadata(self, session_metadata: SessionMetadata | None) -> None:
         self.session_metadata = parse_session_metadata(session_metadata)

@@ -19,6 +19,7 @@
             }
           ]
         },
+        "sources": {},
         "citations": [],
         "checks": [
           {
@@ -37,15 +38,15 @@
       "answer_id": "answer-completed",
       "message": "",
       "problem": null,
-      "request_id": "request-completed",
       "missing_slots": [],
-      "trace": "Request ID: request-completed",
+      "trace": "Execution ID: request-completed",
       "debug": null,
       "upload_manifest": {
         "epoch": "contract-epoch",
         "revision": 2,
         "files": []
-      }
+      },
+      "execution_id": "request-completed"
     },
     "partial": {
       "status": "partial",
@@ -66,6 +67,7 @@
             }
           ]
         },
+        "sources": {},
         "citations": [],
         "checks": [
           {
@@ -96,15 +98,15 @@
         "next_action": "supply_information",
         "retry_after_seconds": null
       },
-      "request_id": "request-partial",
       "missing_slots": [],
-      "trace": "Request ID: request-partial",
+      "trace": "Execution ID: request-partial",
       "debug": null,
       "upload_manifest": {
         "epoch": "contract-epoch",
         "revision": 2,
         "files": []
-      }
+      },
+      "execution_id": "request-partial"
     },
     "needs_input": {
       "status": "needs_input",
@@ -112,17 +114,17 @@
       "answer_id": null,
       "message": "비교할 파일을 첨부해 주세요.",
       "problem": null,
-      "request_id": "request-needs-input",
       "missing_slots": [
         "upload"
       ],
-      "trace": "Request ID: request-needs-input",
+      "trace": "Execution ID: request-needs-input",
       "debug": null,
       "upload_manifest": {
         "epoch": "contract-epoch",
         "revision": 2,
         "files": []
-      }
+      },
+      "execution_id": "request-needs-input"
     },
     "failed": {
       "status": "failed",
@@ -136,11 +138,11 @@
         "next_action": "retry_later",
         "retry_after_seconds": null
       },
-      "request_id": "request-failed",
       "missing_slots": [],
-      "trace": "Request ID: request-failed",
+      "trace": "Execution ID: request-failed",
       "debug": null,
-      "upload_manifest": null
+      "upload_manifest": null,
+      "execution_id": "request-failed"
     },
     "refused": {
       "status": "refused",
@@ -154,11 +156,11 @@
         "next_action": "none",
         "retry_after_seconds": null
       },
-      "request_id": "request-refused",
       "missing_slots": [],
-      "trace": "Request ID: request-refused",
+      "trace": "Execution ID: request-refused",
       "debug": null,
-      "upload_manifest": null
+      "upload_manifest": null,
+      "execution_id": "request-refused"
     }
   },
   "missing_response_fields": [
@@ -197,6 +199,13 @@
       "content",
       0,
       "refs"
+    ],
+    [
+      "execution_id"
+    ],
+    [
+      "response",
+      "sources"
     ]
   ],
   "invalid_events": [
@@ -225,14 +234,14 @@
     {
       "event": "request_started",
       "data": {
-        "request_id": "request-1"
+        "execution_id": "request-1"
       }
     },
     {
       "event": "heartbeat",
       "data": {
-        "request_id": "request-1",
-        "elapsed_ms": "10"
+        "elapsed_ms": "10",
+        "execution_id": "request-1"
       }
     },
     {

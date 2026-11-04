@@ -97,7 +97,7 @@ def test_stream_without_final_response_fails_and_invalidates_session(transport, 
 def test_interrupted_stream_fails_without_replaying_question(transport, client, progress_received, failure):
     error = (ReadTimeoutError(None, "/agent/stream", "read timed out") if failure == "read-timeout"
              else requests.exceptions.ConnectionError("connection lost"))
-    chunks = [frame("request_started", {"request_id": "request-1", "session_id": "session-1"})] if progress_received else []
+    chunks = [frame("request_started", {"execution_id": "request-1", "session_id": "session-1"})] if progress_received else []
     response, sent = transport([*chunks, error])
 
     events = list(client.stream("결과를 저장해줘"))
@@ -128,7 +128,7 @@ def test_redirect_does_not_forward_question_post(transport, client):
 def test_session_accepts_utf8_characters_split_across_http_chunks(transport, client):
     expected = finalize_answer(text_document("한글 답변 🧪"), [])
     committed = UploadManifest(epoch="confirmed", revision=3, files=[])
-    payload = AgentResponse(response=expected, upload_manifest=committed, trace="Request ID: utf8").model_dump(mode="json")
+    payload = AgentResponse(response=expected, upload_manifest=committed, trace="Execution ID: utf8").model_dump(mode="json")
     encoded = frame("final_response", payload)
     # One-byte chunks cross both multibyte characters and SSE frame boundaries.
     response, sent = transport([encoded[index:index + 1] for index in range(len(encoded))])
@@ -146,7 +146,7 @@ def test_session_accepts_utf8_characters_split_across_http_chunks(transport, cli
 
 def test_truncated_utf8_fails_and_invalidates_session(transport, client):
     incomplete = b'event: final_response\ndata: {"response": "' + "🧪".encode("utf-8")[:-1]
-    response, sent = transport([frame("request_started", {"request_id": "request-utf8", "session_id": "session-1"}), incomplete])
+    response, sent = transport([frame("request_started", {"execution_id": "request-utf8", "session_id": "session-1"}), incomplete])
 
     events = list(client.stream("질문"))
 
@@ -162,7 +162,7 @@ def test_truncated_utf8_fails_and_invalidates_session(transport, client):
 def test_client_preserves_incomplete_slack_form_input_for_action_validation(transport, client):
     client.context.slack_recipient = RecipientInput(kind="channel", value="")
     answer = finalize_answer(text_document("일반 질문의 답변"), [])
-    payload = AgentResponse(response=answer, upload_manifest=client.manifest, trace="Request ID: recipient").model_dump(mode="json")
+    payload = AgentResponse(response=answer, upload_manifest=client.manifest, trace="Execution ID: recipient").model_dump(mode="json")
     response, sent = transport([frame("final_response", payload)])
 
     events = list(client.stream("일반 질문"))

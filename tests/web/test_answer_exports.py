@@ -6,6 +6,7 @@ from contextlib import nullcontext
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 import pytest
@@ -13,9 +14,9 @@ import pytest
 from src.app.answer_exports import AnswerExportService
 from src.app.web.app import create_app
 from src.app.web.session_store import InMemorySessionStore
-from src.core.answer_schema import AnswerResponse, ResponseIssue, export_answer_text, finalize_answer, text_document
+from src.core.answer_schema import ActionReceipt, ResponseIssue, export_answer_text, finalize_answer, text_document
 from src.core.answer_schema.models import SemanticCheck, SemanticValidation, semantic_evidence_fingerprint
-from src.core.contracts.graph_state import PendingRequest
+from src.core.pending_request import PendingRequest
 from src.core.save_contract import SaveOperation
 from src.infra.settings import AppSettings
 from src.runtime.agent_runtime.session_context import SessionContext
@@ -53,18 +54,20 @@ def exports(tmp_path, monkeypatch):
 def test_direct_save_preserves_server_answer_sources_and_limits(exports):
     client, _, session, answer_id, original, _ = exports
     # Client-controlled or subsequent displayed bodies must never replace the snapshot.
-    session.previous_response = finalize_answer(text_document("another answer"), [])
+    session.commit_previous_response(finalize_answer(text_document("another answer"), []))
     response = client.post(f"/sessions/export-session/answers/{answer_id}/save", json={"content": "tampered"})
 
     assert response.status_code == 200
     result = response.json()
     assert result["status"] == "completed"
-    saved = AnswerResponse.model_validate(result["response"])
-    assert saved.model_copy(update={"actions": []}) == original
-    receipt = saved.actions[-1]
+    assert result["execution_id"] == response.headers["X-Execution-ID"]
+    assert str(UUID(result["execution_id"])) == result["execution_id"]
+    assert "response" not in result
+    receipt = ActionReceipt.model_validate(result["receipt"])
     assert receipt.verification == "verified"
     download = client.get(f"/download/{receipt.artifact.filename}")
     assert download.status_code == 200
+    assert download.content == export_answer_text(original, include_sources=True).encode("utf-8-sig")
     assert session.get_answer(answer_id) == original
 
 
@@ -82,11 +85,10 @@ def test_sentence_scope_survives_saved_snapshot(exports):
     assert response.status_code == 200
     result = response.json()
     assert result["status"] == "completed"
-    saved = AnswerResponse.model_validate(result["response"])
-    assert saved.content.blocks[0].content[0].sentence_scope == 1
-    assert saved.citations == original.citations
-    assert saved.model_copy(update={"actions": []}) == scoped
-    download = client.get(f"/download/{saved.actions[-1].artifact.filename}")
+    receipt = ActionReceipt.model_validate(result["receipt"])
+    assert session.get_answer(answer_id).content.blocks[0].content[0].sentence_scope == 1
+    assert session.get_answer(answer_id).citations == original.citations
+    download = client.get(f"/download/{receipt.artifact.filename}")
     assert download.status_code == 200
     assert session.get_answer(answer_id) == scoped
 
@@ -97,7 +99,7 @@ def test_duplicate_save_requests_reuse_one_artifact(exports):
     with ThreadPoolExecutor(max_workers=2) as pool:
         responses = list(pool.map(lambda _: client.post(url).json(), range(2)))
     assert [item["status"] for item in responses] == ["completed", "completed"]
-    assert responses[0]["response"]["actions"] == responses[1]["response"]["actions"]
+    assert responses[0]["receipt"] == responses[1]["receipt"]
     assert len(list(output.glob("*.txt"))) == 1
 
 
@@ -115,7 +117,7 @@ def test_published_export_with_unavailable_readback_remains_unknown(exports, mon
         result = client.post(f"/sessions/export-session/answers/{answer_id}/save").json()
 
     assert result["status"] == "failed"
-    receipt = result["response"]["actions"][-1]
+    receipt = result["receipt"]
     assert receipt["status"] == "unknown"
     assert receipt["verification"] == "unverifiable"
     assert receipt["error_code"] == "artifact_unverifiable"
@@ -149,22 +151,23 @@ def test_direct_retry_completes_only_the_matching_prepared_save(exports, slack, 
         session_id=session.session_id, request_id="original-request", contract_revision=1,
         target_kind="compose", source_hash=original.content_hash, answer_hash=original.content_hash,
     )
-    session.pending_request = PendingRequest(
+    session.commit_pending_request(PendingRequest(
         contract=_contract(save="requested", slack=slack),
         response=pending_response, body_prepared=True, phase="awaiting_delivery", save_operation=operation,
-    )
+    ))
     result = client.post(f"/sessions/export-session/answers/{answer_id}/save").json()
     assert result["status"] == "completed"
-    assert result["response"]["actions"][-1]["operation"] == operation.model_dump(mode="json")
+    assert result["receipt"]["operation"] == operation.model_dump(mode="json")
     if slack == "not_requested":
         assert session.pending_request is None
     else:
         assert session.pending_request.completed_actions == ("save_text",)
         assert session.pending_request.save_receipt.verification == "verified"
         assert session.pending_request.contract.actions.slack_notify.intent == slack
+        assert session.pending_request.phase == ("awaiting_input" if slack == "unresolved" else "awaiting_destination")
     repeated = client.post(f"/sessions/export-session/answers/{answer_id}/save").json()
     assert repeated["status"] == "completed"
-    assert repeated["response"]["actions"][-1]["operation"] == operation.model_dump(mode="json")
+    assert repeated["receipt"]["operation"] == operation.model_dump(mode="json")
     assert len(list(output.glob("*.txt"))) == 1
 
 
@@ -185,8 +188,8 @@ def test_revalidated_snapshots_share_exports_and_the_current_expiry_generation(e
     original_url = f"/sessions/export-session/answers/{original_id}/save"
     revised_url = f"/sessions/export-session/answers/{revised_id}/save"
 
-    first = client.post(original_url).json()["response"]["actions"][0]
-    repeated = client.post(revised_url).json()["response"]["actions"][0]
+    first = client.post(original_url).json()["receipt"]
+    repeated = client.post(revised_url).json()["receipt"]
     assert repeated["operation"] == first["operation"]
     assert repeated["artifact"] == first["artifact"]
     assert len(list(output.glob("*.txt"))) == 1
@@ -194,9 +197,9 @@ def test_revalidated_snapshots_share_exports_and_the_current_expiry_generation(e
     old_manifest = output / (first["artifact"]["filename"] + ".json")
     manifest_bytes = old_manifest.read_bytes()
     monkeypatch.setattr(saved_artifacts, "time", lambda: first["artifact"]["expires_at"] + 1)
-    renewed = client.post(revised_url).json()["response"]["actions"][0]
+    renewed = client.post(revised_url).json()["receipt"]
     assert renewed["operation"]["operation_id"] != first["operation"]["operation_id"]
-    assert client.post(original_url).json()["response"]["actions"][0] == renewed
+    assert client.post(original_url).json()["receipt"] == renewed
     assert old_manifest.read_bytes() == manifest_bytes
     assert len(list(output.glob("*.txt"))) == 2
 
@@ -214,8 +217,8 @@ def test_distinct_export_content_keeps_separate_operations(exports, change):
         changed = original.model_copy(update={"issues": [ResponseIssue(code="scope", message="변경된 제한입니다.")]})
     changed_id = session.register_answer(changed)
 
-    first = client.post(f"/sessions/export-session/answers/{original_id}/save").json()["response"]["actions"][0]
-    second = client.post(f"/sessions/export-session/answers/{changed_id}/save").json()["response"]["actions"][0]
+    first = client.post(f"/sessions/export-session/answers/{original_id}/save").json()["receipt"]
+    second = client.post(f"/sessions/export-session/answers/{changed_id}/save").json()["receipt"]
 
     assert first["operation"]["operation_id"] != second["operation"]["operation_id"]
     assert first["artifact"]["artifact_id"] != second["artifact"]["artifact_id"]
@@ -228,7 +231,7 @@ def test_exporting_partial_answer_does_not_finish_its_incomplete_original_reques
         contract=_contract(save="requested"),
         response=original, body_prepared=False, phase="awaiting_body",
     )
-    session.pending_request = pending
+    session.commit_pending_request(pending)
     result = client.post(f"/sessions/export-session/answers/{answer_id}/save").json()
     assert result["status"] == "completed"
     assert session.pending_request == pending
@@ -241,7 +244,7 @@ def test_natural_language_failure_direct_retry_and_natural_repeat_share_one_file
     monkeypatch.setattr("src.app.web.routes.get_save_text_output_dir", lambda: tmp_path)
     manager = _manager(export_graph())
     original = checked_source()
-    manager.session.previous_response = original
+    manager.session.commit_previous_response(original)
     real_link = saved_artifacts.os.link
 
     def unavailable_payload(source, destination):
@@ -252,10 +255,10 @@ def test_natural_language_failure_direct_retry_and_natural_repeat_share_one_file
     with monkeypatch.context() as failing:
         failing.setattr(saved_artifacts.os, "link", unavailable_payload)
         failed = manager.run_agent_flow("방금 답변을 출처와 함께 txt 파일로 저장해줘")
-    assert failed["status"] == "partial"
-    assert failed["problem"]["code"] == "save_failed"
-    assert failed["response"]["actions"][0]["status"] == "error"
-    assert failed["answer_id"]
+    assert failed.outcome.status == "partial"
+    assert failed.outcome.problem.code == "save_failed"
+    assert failed.outcome.response.actions[0].status == "error"
+    assert failed.outcome.answer_id
     assert manager.session.pending_request is not None
     store = InMemorySessionStore(settings=manager.settings, agent_factory=lambda: manager)
     store.get_or_create("flow-session")
@@ -263,13 +266,13 @@ def test_natural_language_failure_direct_retry_and_natural_repeat_share_one_file
     app.router.lifespan_context = lambda _app: nullcontext()
     app.state.answer_export_service = AnswerExportService(settings=manager.settings, session_store=store)
     with TestClient(app) as client:
-        direct = client.post(f"/sessions/flow-session/answers/{failed['answer_id']}/save").json()
+        direct = client.post(f"/sessions/flow-session/answers/{failed.outcome.answer_id}/save").json()
         assert direct["status"] == "completed"
         assert manager.session.pending_request is None
         repeated = manager.run_agent_flow("방금 답변을 출처와 함께 txt 파일로 저장해줘")
-        assert repeated["status"] == "completed"
-        receipts = [item["response"]["actions"][0] for item in (failed, direct, repeated)]
-        assert receipts[0]["operation"] == receipts[1]["operation"] == receipts[2]["operation"]
+        assert repeated.outcome.status == "completed"
+        receipt = ActionReceipt.model_validate(direct["receipt"])
+        assert failed.outcome.response.actions[0].operation == receipt.operation == repeated.outcome.response.actions[0].operation
     assert len(list(tmp_path.glob("*.txt"))) == 1
 
 
@@ -278,7 +281,7 @@ def test_expired_export_creates_one_new_generation_without_changing_old_artifact
 
     client, _, _, answer_id, _, output = exports
     url = f"/sessions/export-session/answers/{answer_id}/save"
-    first = client.post(url).json()["response"]["actions"][0]
+    first = client.post(url).json()["receipt"]
     old_manifest = output / (first["artifact"]["filename"] + ".json")
     manifest_bytes = old_manifest.read_bytes()
     monkeypatch.setattr(saved_artifacts, "time", lambda: first["artifact"]["expires_at"] + 1)
@@ -286,10 +289,10 @@ def test_expired_export_creates_one_new_generation_without_changing_old_artifact
     renewed = client.post(url).json()
 
     assert renewed["status"] == "completed"
-    next_receipt = renewed["response"]["actions"][0]
+    next_receipt = renewed["receipt"]
     assert next_receipt["operation"]["operation_id"] != first["operation"]["operation_id"]
     repeated = client.post(url).json()
-    assert repeated["response"]["actions"][0]["operation"] == next_receipt["operation"]
+    assert repeated["receipt"]["operation"] == next_receipt["operation"]
     assert client.get(f"/download/{first['artifact']['filename']}").status_code == 410
     assert old_manifest.read_bytes() == manifest_bytes
     assert len(list(output.glob("*.txt"))) == 2
@@ -300,7 +303,7 @@ def test_expired_export_write_failure_retries_the_same_new_generation(exports, m
 
     client, _, _, answer_id, _, output = exports
     url = f"/sessions/export-session/answers/{answer_id}/save"
-    first = client.post(url).json()["response"]["actions"][0]
+    first = client.post(url).json()["receipt"]
     monkeypatch.setattr(saved_artifacts, "time", lambda: first["artifact"]["expires_at"] + 1)
     real_link = saved_artifacts.os.link
 
@@ -313,11 +316,11 @@ def test_expired_export_write_failure_retries_the_same_new_generation(exports, m
         failing.setattr(saved_artifacts.os, "link", unavailable_payload)
         failed = client.post(url).json()
     assert failed["status"] == "failed"
-    failed_receipt = failed["response"]["actions"][0]
+    failed_receipt = failed["receipt"]
     assert failed_receipt["operation"]["operation_id"] != first["operation"]["operation_id"]
     retried = client.post(url).json()
     assert retried["status"] == "completed"
-    assert retried["response"]["actions"][0]["operation"] == failed_receipt["operation"]
+    assert retried["receipt"]["operation"] == failed_receipt["operation"]
     assert len(list(output.glob("*.txt"))) == 2
 
 
@@ -327,7 +330,7 @@ def test_export_does_not_renew_damaged_or_conflicting_expired_metadata(exports, 
 
     client, _, _, answer_id, _, output = exports
     url = f"/sessions/export-session/answers/{answer_id}/save"
-    first = client.post(url).json()["response"]["actions"][0]
+    first = client.post(url).json()["receipt"]
     manifest_path = output / (first["artifact"]["filename"] + ".json")
     if damage == "invalid_json":
         manifest_path.write_text("broken", encoding="utf-8")
@@ -340,5 +343,5 @@ def test_export_does_not_renew_damaged_or_conflicting_expired_metadata(exports, 
     failed = client.post(url).json()
 
     assert failed["status"] == "failed"
-    assert failed["response"]["actions"][0]["operation"] == first["operation"]
+    assert failed["receipt"]["operation"] == first["operation"]
     assert len(list(output.glob("*.txt"))) == 1

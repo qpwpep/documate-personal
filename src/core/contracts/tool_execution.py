@@ -31,9 +31,9 @@ class ToolExecutionEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[1]
-    request_id: str = Field(
+    execution_id: str = Field(
         min_length=1, strict=True,
-        description="ID of this execution, matching TurnResult.request_id; not the domain request ID.",
+        description="ID of this execution, matching TurnResult.execution_id; not the domain request ID.",
     )
     status: Literal["complete", "incomplete", "unavailable"]
     events: list[ToolExecutionEvent]

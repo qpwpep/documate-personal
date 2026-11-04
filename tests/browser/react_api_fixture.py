@@ -188,10 +188,10 @@ def run(port: int) -> None:
         assert (request.method, request.url.path) == ("POST", "/v1/decisions")
         payload = json.loads(request.content)
         for query, (entered, released) in held_decisions.items():
-            if query in payload["input"] and any(item["name"] == "request_ready" for item in payload["questions"]):
+            if query in payload["input"] and any(item["name"] == "request_fulfilled" for item in payload["questions"]):
                 entered.set()
                 if not released.wait(20):
-                    raise AssertionError("The browser did not release its held pre-validation request")
+                    raise AssertionError("The browser did not release its held body-validation request")
         probability = 0.91 if "한글 답변 유지" in payload["input"] else 0.99
         reject_answer = "답변 조건 실패 검증" in payload["input"]
         if reject_answer and any(item["name"] == "request_fulfilled" for item in payload["questions"]):

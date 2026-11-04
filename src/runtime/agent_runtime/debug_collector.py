@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, get_args
+from typing import get_args
 
 from src.core.answer_schema import ActionReceipt
-from src.core.contracts.debug import DEBUG_SCHEMA_VERSION, ErrorCode, RetryState
+from src.core.contracts.debug import ActionResults, DebugPayload, ErrorCode, RetryState, RetrievalDiagnostic, SaveTextActionResult
+from src.core.contracts.graph_state import GraphState
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import validate_route_decisions
 from src.core.contracts.boundary.debug import get_debug_state
@@ -19,24 +20,21 @@ from src.runtime.agent_runtime.llm_usage import current_llm_calls
 
 class DebugCollector:
     @staticmethod
-    def _extract_action_results(receipts: list[ActionReceipt]) -> dict[str, Any] | None:
-        action_results: dict[str, Any] = {}
+    def _extract_action_results(receipts: list[ActionReceipt]) -> ActionResults | None:
+        action_results = ActionResults()
         for receipt in receipts:
             if receipt.kind == "save_text":
-                action_results["save_text"] = {
-                    "status": receipt.status,
-                    "file_path": receipt.file_path,
-                    "bytes": receipt.artifact.byte_count if receipt.artifact is not None else 0,
-                    "error": receipt.error,
-                    "message": receipt.message,
-                    "error_code": receipt.error_code,
-                }
+                action_results.save_text = SaveTextActionResult(
+                    status=receipt.status, file_path=receipt.file_path,
+                    bytes=receipt.artifact.byte_count if receipt.artifact is not None else 0,
+                    error=receipt.error, message=receipt.message, error_code=receipt.error_code,
+                )
             elif receipt.slack is not None:
-                action_results["slack_notify"] = receipt.slack.model_dump(mode="json")
-        return action_results or None
+                action_results.slack_notify = receipt.slack
+        return action_results if action_results.save_text is not None or action_results.slack_notify is not None else None
 
     @staticmethod
-    def _serialize_retry_context(retry: RetryState) -> dict[str, Any] | None:
+    def _retry_context(retry: RetryState) -> RetryState | None:
         if not retry.needs_retry and retry.attempt <= 0 and retry.retry_reason is None and not retry.retrieval_feedback:
             if (
                 retry.hit_start_index == 0
@@ -49,17 +47,17 @@ class DebugCollector:
                 and retry.terminal_retrieval_reason is None
             ):
                 return None
-        return retry.model_dump(mode="json", exclude={"preserved_hits", "preserved_retrieval_diagnostics"})
+        return retry.model_copy(update={"preserved_hits": [], "preserved_retrieval_diagnostics": []})
 
     @staticmethod
     def _collect_error_codes(
         *,
-        state_error_codes: list[str],
-        retrieval_diagnostics: list[dict[str, Any]],
-        action_results: dict[str, Any] | None,
+        state_error_codes: list[ErrorCode],
+        retrieval_diagnostics: list[RetrievalDiagnostic],
+        action_results: ActionResults | None,
         debug_errors: list[str],
-    ) -> list[str]:
-        codes: list[str] = []
+    ) -> list[ErrorCode]:
+        codes: list[ErrorCode] = []
         allowed = get_args(ErrorCode)
 
         def add(code: str | None) -> None:
@@ -69,9 +67,9 @@ class DebugCollector:
         for code in state_error_codes:
             add(code)
         for diagnostic in retrieval_diagnostics:
-            add(diagnostic.get("error_code"))
-        for result in (action_results or {}).values():
-            add(result.get("error_code"))
+            add(diagnostic.error_code)
+        if action_results is not None and action_results.save_text is not None:
+            add(action_results.save_text.error_code)
         for error in debug_errors:
             lowered = error.lower()
             if "local_rag_failed" in lowered or "local similarity search failed" in lowered:
@@ -81,9 +79,9 @@ class DebugCollector:
     def build(
         self,
         *,
-        response: dict[str, Any],
+        response: GraphState,
         graph_total_ms: int,
-    ) -> dict[str, Any]:
+    ) -> DebugPayload:
         tool_calls: list[str] = []
         state_debug = get_debug_state(response)
         state_response = get_response_state(response)
@@ -102,19 +100,16 @@ class DebugCollector:
             missing_required_debug_fields.append("route_decisions")
             debug_errors.append(f"route_decisions invalid: {exc}")
         calls = current_llm_calls()
-        llm_calls = [item.model_dump(mode="json") for item in calls] if calls is not None else None
         planner_errors = list(state_debug.planner_errors)
 
         execution_evidence = current_execution_evidence()
         if execution_evidence is not None:
             tool_calls = [event.tool_name for event in execution_evidence.events if event.phase == "started"]
 
-        observed_hits = [
-            hit.model_dump(mode="json") for hit in dedupe_search_hits(get_retrieval_state(response).hit_log)
-        ]
-        retry_context = self._serialize_retry_context(state_retry)
-        retrieval_diagnostics = [item.model_dump(mode="json") for item in state_debug.retrieval_diagnostics]
-        planner_diagnostics = state_planner.diagnostics.model_dump(mode="json")
+        observed_hits = dedupe_search_hits(get_retrieval_state(response).hit_log)
+        retry_context = self._retry_context(state_retry)
+        retrieval_diagnostics = list(state_debug.retrieval_diagnostics)
+        planner_diagnostics = state_planner.diagnostics
         action_results = self._extract_action_results(state_response.result.actions)
         latency_errors: list[str] = []
         latency_breakdown = build_latency_breakdown(
@@ -145,28 +140,18 @@ class DebugCollector:
                 response_hash=state_response.result.content_hash,
                 source=state_response.evidence_source,
                 evidence_packet=state_response.evidence_packet,
-            ).model_dump(mode="json")
+            )
 
-        return {
-            "schema_version": DEBUG_SCHEMA_VERSION,
-            "observability_status": "failed" if missing_required_debug_fields else state_debug.observability_status,
-            "missing_required_debug_fields": missing_required_debug_fields,
-            "tool_calls": tool_calls,
-            "tool_call_count": len(tool_calls),
-            "execution_evidence": execution_evidence.model_dump(mode="json") if execution_evidence is not None else None,
-            "llm_calls": llm_calls,
-            "llm_diagnostics": [item.model_dump(mode="json") for item in state_debug.llm_diagnostics],
-            "errors": debug_errors,
-            "error_codes": error_codes,
-            "validation_events": list(state_debug.validation_events or []),
-            "route_decisions": [item.model_dump(mode="json") for item in route_decisions],
-            "memory_compactions": list(state_debug.memory_compactions),
-            "planner_errors": planner_errors,
-            "observed_hits": observed_hits,
-            "answer_provenance": answer_provenance,
-            "retry_context": retry_context,
-            "retrieval_diagnostics": retrieval_diagnostics,
-            "planner_diagnostics": planner_diagnostics,
-            "latency_breakdown": latency_breakdown.model_dump(mode="json"),
-            "action_results": action_results,
-        }
+        return DebugPayload(
+            observability_status="failed" if missing_required_debug_fields else state_debug.observability_status,
+            missing_required_debug_fields=missing_required_debug_fields,
+            tool_calls=tool_calls, tool_call_count=len(tool_calls), execution_evidence=execution_evidence,
+            llm_calls=calls, llm_diagnostics=list(state_debug.llm_diagnostics),
+            errors=debug_errors, error_codes=error_codes,
+            validation_events=list(state_debug.validation_events), route_decisions=route_decisions,
+            memory_compactions=list(state_debug.memory_compactions), planner_errors=planner_errors,
+            observed_hits=observed_hits, answer_provenance=answer_provenance,
+            retry_context=retry_context, retrieval_diagnostics=retrieval_diagnostics,
+            planner_diagnostics=planner_diagnostics, latency_breakdown=latency_breakdown,
+            action_results=action_results,
+        )

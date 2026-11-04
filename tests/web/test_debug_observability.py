@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from src.app.web.agent_request_support import build_debug_info
 from src.core.answer_schema import ActionReceipt, finalize_answer, text_document
 from src.core.contracts.graph_state import DebugState, ResponseState, RetrievalState
+from src.core.contracts.debug import DEBUG_REQUIRED_FIELDS, DebugPayload
 from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.eval.online_runner.response_parser import parse_agent_response
@@ -20,7 +21,7 @@ from src.runtime.agent_runtime.debug_collector import DebugCollector
 def debug_payload():
     return DebugCollector().build(
         response={"route_decisions": []}, graph_total_ms=200,
-    )
+    ).model_dump(mode="json")
 
 
 def test_canonical_error_codes_survive_runtime_and_web_boundaries():
@@ -36,8 +37,8 @@ def test_canonical_error_codes_survive_runtime_and_web_boundaries():
     )
     expected = ["provider_unavailable", "model_output_invalid", "LOCAL_RAG_FAILED", "save_failed"]
 
-    assert debug["error_codes"] == expected
-    assert debug["action_results"]["save_text"]["error_code"] == "save_failed"
+    assert debug.error_codes == expected
+    assert debug.action_results.save_text.error_code == "save_failed"
     normalized = build_debug_info(debug, 220, answer_expected=False)
     assert normalized.error_codes == expected
     assert normalized.action_results.save_text.error_code == "save_failed"
@@ -51,7 +52,7 @@ def test_web_rejects_noncanonical_internal_codes_while_eval_parses_external_obse
     expected = ["provider_unavailable", "model_output_invalid", "save_failed", "LOCAL_RAG_FAILED"]
 
     with pytest.raises(ValidationError):
-        build_debug_info(debug_payload, 220, answer_expected=False)
+        DebugPayload.model_validate(debug_payload)
     parsed = parse_agent_response({"status": "needs_input", "message": "Which source?", "debug": debug_payload})
     assert parsed.error_codes == expected
     assert parsed.response_errors == []
@@ -97,7 +98,7 @@ def test_invalid_internal_hit_is_rejected_instead_of_being_dropped(debug_payload
     debug_payload["observed_hits"] = [hit.model_dump(mode="json"), {}]
 
     with pytest.raises(ValidationError):
-        build_debug_info(debug_payload, 220, answer_expected=False)
+        DebugPayload.model_validate(debug_payload)
 
 
 @pytest.mark.parametrize("observed_hits", [None, {}, [None]])
@@ -105,7 +106,7 @@ def test_invalid_observed_hit_container_is_not_reported_as_an_empty_search(debug
     debug_payload["observed_hits"] = observed_hits
 
     with pytest.raises(ValidationError):
-        build_debug_info(debug_payload, 220, answer_expected=False)
+        DebugPayload.model_validate(debug_payload)
 
 
 @pytest.mark.parametrize("invalid_event", [
@@ -144,7 +145,7 @@ def test_invalid_internal_latency_is_rejected(debug_payload, invalid_latency):
     debug_payload["latency_breakdown"] = invalid_latency
 
     with pytest.raises(ValidationError):
-        build_debug_info(debug_payload, 220, answer_expected=False)
+        DebugPayload.model_validate(debug_payload)
 
 
 @pytest.mark.parametrize("field,value", [("observability_status", "unknown"), ("schema_version", "14")])
@@ -152,21 +153,19 @@ def test_internal_metadata_is_not_silently_normalized(debug_payload, field, valu
     debug_payload[field] = value
 
     with pytest.raises(ValidationError):
-        build_debug_info(debug_payload, 220, answer_expected=False)
+        DebugPayload.model_validate(debug_payload)
 
 
-def test_missing_internal_observation_is_not_defaulted_to_empty(debug_payload):
-    del debug_payload["observed_hits"]
-
-    with pytest.raises(ValueError, match="observed_hits"):
-        build_debug_info(debug_payload, 220, answer_expected=False)
+def test_typed_observations_always_publish_the_complete_debug_contract(debug_payload):
+    assert set(DEBUG_REQUIRED_FIELDS) <= debug_payload.keys()
+    assert debug_payload["observed_hits"] == []
 
 
 def test_invalid_execution_history_cannot_bypass_the_typed_contract(debug_payload):
     debug_payload["execution_evidence"] = {
-        "schema_version": 1, "request_id": "test-request", "status": "complete",
+        "schema_version": 1, "execution_id": "test-request", "status": "complete",
         "events": [{"sequence": 1, "invocation_id": "save-1", "tool_name": "save_text", "phase": "started"}],
     }
 
     with pytest.raises(ValidationError, match="unfinished"):
-        build_debug_info(debug_payload, 220, answer_expected=False)
+        DebugPayload.model_validate(debug_payload)

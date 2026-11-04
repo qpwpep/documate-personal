@@ -94,7 +94,7 @@ def test_late_provider_success_does_not_publish_answer_save_or_commit_memory(
     _save, _slack, deliveries, output = delivery_tools
     manager = AgentFlowManager(_settings())
     stable = manager.run_agent_flow("짧은 답변을 작성해줘")
-    assert stable["status"] == "completed"
+    assert stable.outcome.status == "completed"
     before = manager.session.snapshot_conversation_memory()
     previous = manager.session.previous_response.model_copy(deep=True)
     controls["expire_at"] = late_stage
@@ -103,18 +103,18 @@ def test_late_provider_success_does_not_publish_answer_save_or_commit_memory(
         controls["deadline"] = deadline
         result = manager.run_agent_flow("답변을 작성하고 저장해줘")
 
-    assert result["status"] == "failed"
-    assert result["problem"]["code"] == "request_timeout"
-    assert result["response"] is None
-    assert result["answer_id"] is None
+    assert result.outcome.status == "failed"
+    assert result.outcome.problem.code == "request_timeout"
+    assert result.outcome.response is None
+    assert result.outcome.answer_id is None
     assert manager.session.snapshot_conversation_memory() == before
     assert manager.session.previous_response == previous
     assert not output.exists()
     assert deliveries == []
     assert all(0 < item["remaining"] <= 10 for item in requests)
     assert all(0 < item["timeout"]["read"] <= 10 for item in requests)
-    assert result["debug"]["llm_calls"][-1]["status"] == "failed"
-    assert result["debug"]["llm_diagnostics"][-1]["code"] == "request_timeout"
+    assert result.debug.llm_calls[-1].status == "failed"
+    assert result.debug.llm_diagnostics[-1].code == "request_timeout"
 
 
 def test_late_summary_does_not_fall_back_and_continue_to_planner(runtime_api, delivery_tools):
@@ -131,8 +131,8 @@ def test_late_summary_does_not_fall_back_and_continue_to_planner(runtime_api, de
         controls["deadline"] = deadline
         result = manager.run_agent_flow("new request")
 
-    assert result["problem"]["code"] == "request_timeout"
-    assert result["response"] is None
+    assert result.outcome.problem.code == "request_timeout"
+    assert result.outcome.response is None
     assert manager.session.snapshot_conversation_memory() == before
     assert [item["stage"] for item in requests] == ["summary"]
 
@@ -153,8 +153,8 @@ def test_summary_retry_after_outside_remaining_request_does_not_sleep(runtime_ap
     monkeypatch.setattr("src.runtime.nodes.session.time", SimpleNamespace(sleep=reject_sleep))
     result = manager.run_agent_flow("new request")
 
-    assert result["status"] == "completed"
+    assert result.outcome.status == "completed"
     assert "committed summary" in manager.memory_summary
     assert [item["stage"] for item in requests].count("summary") == 1
-    assert any(item["code"] == "provider_rate_limited" and item["recovery"] == "stop"
-               for item in result["debug"]["llm_diagnostics"])
+    assert any(item.code == "provider_rate_limited" and item.recovery == "stop"
+               for item in result.debug.llm_diagnostics)
