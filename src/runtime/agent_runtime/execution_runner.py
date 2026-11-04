@@ -53,8 +53,8 @@ class ExecutionRunner:
             session_metadata=self.session.snapshot_session_metadata(),
             previous_response=(self.session.previous_response.model_copy(deep=True)
                                if self.session.previous_response is not None else None),
-            pending_action=(self.session.pending_action.model_copy(deep=True)
-                            if self.session.pending_action is not None else None),
+            pending_request=(self.session.pending_request.model_copy(deep=True)
+                            if self.session.pending_request is not None else None),
             answer_export_operations=dict(self.session.answer_export_operations),
         )
 

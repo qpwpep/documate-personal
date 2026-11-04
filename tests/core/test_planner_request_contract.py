@@ -6,7 +6,7 @@ from langchain_core.messages import HumanMessage
 
 from src.core.answer_schema import finalize_answer, text_document
 from src.core.contracts.boundary.graph import build_graph_state_input
-from src.core.contracts.graph_state import PendingAction
+from src.core.contracts.graph_state import PendingRequest
 from src.core.planner_schema import InitialPlannerOutput, RetrievalRewrite, RetrievalRewriteOutput, RetrievalTask
 from src.core.llm_errors import LLMCallError
 from src.core.request_contracts import (
@@ -50,7 +50,7 @@ def original_pending(*, response, completed=()):
         save_text=ActionRequest(intent="requested", evidence_ids=("original",)),
         slack_notify=ActionRequest(intent="requested", evidence_ids=("original",))),
         evidence=(clause,))
-    return PendingAction(contract=contract, response=response, phase="awaiting_destination", completed_actions=completed,
+    return PendingRequest(contract=contract, response=response, phase="awaiting_destination", completed_actions=completed,
                          body_prepared=True)
 
 
@@ -171,7 +171,7 @@ def test_pending_sentence_correction_preserves_other_scopes_and_rebinds_its_evid
         ),
     ), current_turn_id="old", user_turns=(UserTurnSnapshot(turn_id="old", text=original_query),))
     original = first["runtime"].request_contract
-    pending = PendingAction(contract=original, phase="awaiting_body")
+    pending = PendingRequest(contract=original, phase="awaiting_body")
     query = "alpha 설명은 두 문장으로 바꾸고 전체는 세 문장으로 해줘"
     candidate = WireRequestContract(
         slack_recipient=OmittedRecipient(), relation="correction", target_request_id=original.request_id,
@@ -183,7 +183,7 @@ def test_pending_sentence_correction_preserves_other_scopes_and_rebinds_its_evid
                                    scope="answer.sentence_counts", interpretation="correction"),),
     )
 
-    result, _ = plan(query, candidate, pending_action=pending, user_turns=(
+    result, _ = plan(query, candidate, pending_request=pending, user_turns=(
         UserTurnSnapshot(turn_id="old", text=original_query), UserTurnSnapshot(turn_id="current", text=query),
     ))
 
@@ -211,7 +211,7 @@ def test_new_relation_with_a_matching_target_cannot_reactivate_a_completed_old_a
     candidate = WireRequestContract(slack_recipient=OmittedRecipient(), relation="new", target_request_id=pending.contract.request_id,
         body=ComposeBody(instruction=query),
         actions=ActionContract(save_text=pending.contract.actions.save_text), evidence=pending.contract.evidence)
-    result, _ = plan(query, candidate, pending_action=pending,
+    result, _ = plan(query, candidate, pending_request=pending,
         user_turns=(UserTurnSnapshot(turn_id="old", text="저장하고 Slack으로 보내줘"), UserTurnSnapshot(turn_id="current", text=query)))
     contract = result["runtime"].request_contract
     assert contract.request_id != pending.contract.request_id

@@ -119,7 +119,7 @@ def test_provider_schema_rejection_preserves_session_without_committing_an_answe
     assert len(provider_requests) == 1
     assert session.snapshot_conversation_memory() == before
     assert session.previous_response is None
-    assert session.pending_action is None
+    assert session.pending_request is None
     stages = [event.data["stage"] for event in events if event.event == "stage_started"]
     assert stages == ["planner"]
     for private in ("PRIVATE", "oneOf", "credential=secret", "private-provider-request"):

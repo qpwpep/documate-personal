@@ -7,7 +7,6 @@ from uuid import uuid4
 from src.core.answer_schema import text_document
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.runtime import get_runtime_state
-from src.core.contracts.graph_state import PendingAction
 from src.core.request_bodies import body_to_wire
 from src.core.request_contracts import (
     AcknowledgeBody, ActionContract, ActionRequest, AnswerContract, AnswerReference, BoundAnswerReference,
@@ -111,7 +110,7 @@ def _bind_body(body, runtime, utterances, original=None, *, declared_missing=())
             return CopyInputBody(source=selected), ()
         return TransformInputBody(source=selected, instruction=body.instruction, evidence_ids=body.evidence_ids), ()
     if isinstance(body, (WireCopyAnswerBody, WireTransformAnswerBody)):
-        response = runtime.previous_response if body.source.ref == "previous" else (runtime.pending_action.response if runtime.pending_action else None)
+        response = runtime.previous_response if body.source.ref == "previous" else (runtime.pending_request.response if runtime.pending_request else None)
         if response is None or not response.content.blocks:
             missing = _missing("answer_reference", "unknown_id", "참조한 답변이 준비되어 있지 않습니다. 사용할 본문을 지정해 주세요.")
             return UnresolvedBody(question=missing.question, instruction=getattr(body, "instruction", "")), (missing,)
@@ -134,7 +133,7 @@ def _apply_requested_copy_layout(body, body_request, answer, runtime):
         document = text_document(body.source.text)
     elif isinstance(body, CopyAnswerBody):
         response = (runtime.previous_response if body.source.ref == "previous"
-                    else runtime.pending_action.response if runtime.pending_action else None)
+                    else runtime.pending_request.response if runtime.pending_request else None)
         if response is None:
             return body, body_request
         document = response.content
@@ -307,46 +306,10 @@ def _merge_pending(proposal: WireRequestContract, pending, *, current_turn_id: s
     })
 
 
-def pending_body_changed(pending: PendingAction, contract: RequestContract) -> bool:
-    """Compare accepted body facts, not turn labels or newly bound evidence IDs.
-
-    Copying the checked pending answer continues its frozen delivery even when
-    the original request composed or transformed it. An unresolved replacement
-    still changes that obligation before its final body can be prepared.
-    """
-    def answer_facts(answer):
-        return {
-            "content": tuple(item.model_dump(exclude={"evidence_ids"}) for item in answer.content),
-            "format": tuple(item.model_dump(exclude={"evidence_ids"}) for item in answer.format),
-            "sentence_counts": tuple(item.model_dump(exclude={"evidence_ids"}) for item in answer.sentence_counts),
-            "preferences": answer.preferences,
-        }
-
-    if answer_facts(contract.answer) != answer_facts(pending.contract.answer):
-        return True
-    if (isinstance(contract.body, CopyAnswerBody) and pending.response is not None
-            and contract.body.source.response_hash == pending.response.content_hash):
-        return False
-    body, previous = contract.body, pending.contract.body
-    if isinstance(body, UnresolvedBody):
-        body = contract.body_request or body
-        previous = pending.contract.body_request or previous
-    # The same answer can be addressed as previous or pending without changing
-    # its bound identity. Input source offsets and hashes remain significant.
-    exclude = {"evidence_ids": True, "source": {"ref"}}
-    return body.model_dump(exclude=exclude) != previous.model_dump(exclude=exclude)
-
-
-def pending_recipient_changed(pending: PendingAction, contract: RequestContract) -> bool:
-    """Only accepted recipient facts replace a pending selection, never new evidence IDs."""
-    return (contract.slack_recipient.model_dump(exclude={"evidence_ids"})
-            != pending.contract.slack_recipient.model_dump(exclude={"evidence_ids"}))
-
-
 def resolve_request_contract(proposal: WireRequestContract, state: GraphState, *, utterances: dict[str, str]) -> RequestContract:
     """Bind a provenance-validated proposal and preserve confirmed pending facts."""
     runtime = get_runtime_state(state)
-    pending = runtime.pending_action
+    pending = runtime.pending_request
     matches_pending = pending is not None and proposal.target_request_id == pending.contract.request_id
     inherits_pending = matches_pending and proposal.relation in {"correction", "supplement", "cancel"}
     if not inherits_pending and any(item.replaces is not None for item in proposal.answer.content):

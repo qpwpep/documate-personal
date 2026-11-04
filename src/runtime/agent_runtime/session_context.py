@@ -18,7 +18,7 @@ from src.core.conversation_memory import extract_memory_text
 from src.core.uploads import UploadContext, UploadManifest, UploadRecord
 
 from src.core.contracts import SessionMetadata
-from src.core.contracts.graph_state import PendingAction
+from src.core.contracts.graph_state import PendingRequest
 from src.core.contracts.boundary.runtime import parse_session_metadata
 from src.infra.logging_utils import log_event
 from src.infra.tools.local_rag import UploadedRetrieverHandle
@@ -51,7 +51,7 @@ class SessionContext:
         self._upload_storage: UploadStorage | None = None
         self.upload_operations: OrderedDict[str, str] = OrderedDict()
         self.previous_response: AnswerResponse | None = None
-        self.pending_action: PendingAction | None = None
+        self.pending_request: PendingRequest | None = None
         self._answers: OrderedDict[str, AnswerResponse] = OrderedDict()
         self.answer_export_operations: OrderedDict[str, SaveOperation] = OrderedDict()
 
@@ -152,7 +152,7 @@ class SessionContext:
                         turn_id=message.id, text=extract_memory_text(message.content),
                     )
         if preserve_turn_ids is None:
-            preserve_turn_ids = required_contract_turn_ids(self.pending_action.contract) if self.pending_action is not None else ()
+            preserve_turn_ids = required_contract_turn_ids(self.pending_request.contract) if self.pending_request is not None else ()
         retained_ids = set(list(turns)[-16:]) | set(preserve_turn_ids)
         next_snapshot = ConversationMemorySnapshot(
             messages=tuple(cloned_messages),
@@ -164,7 +164,7 @@ class SessionContext:
     def reset_conversation_memory(self) -> None:
         self._conversation_memory = ConversationMemorySnapshot()
         self.previous_response = None
-        self.pending_action = None
+        self.pending_request = None
         self._answers.clear()
         self.answer_export_operations.clear()
 
@@ -173,10 +173,10 @@ class SessionContext:
         *,
         response: AnswerResponse,
         response_kind: str,
-        pending_action: PendingAction | None,
+        pending_request: PendingRequest | None,
         displayed_partial: bool = False,
     ) -> None:
-        self.pending_action = pending_action.model_copy(deep=True) if pending_action is not None else None
+        self.pending_request = pending_request.model_copy(deep=True) if pending_request is not None else None
         if response_kind == "answer" or displayed_partial:
             self.previous_response = response.model_copy(deep=True)
 

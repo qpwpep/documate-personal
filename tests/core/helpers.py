@@ -115,7 +115,7 @@ def build_test_state(payload: dict):
         memory_summary=raw.pop("memory_summary", None),
         previous_response=raw.pop("previous_response", None),
         request_contract=raw.pop("request_contract", None),
-        pending_action=raw.pop("pending_action", None),
+        pending_request=raw.pop("pending_request", None),
     )
     if "planner" in raw:
         state["planner"] = PlannerState.model_validate(raw.pop("planner"))

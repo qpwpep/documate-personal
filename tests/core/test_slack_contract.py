@@ -7,7 +7,7 @@ import pytest
 from src.core.answer_schema import AnswerResponse, export_answer_text
 from src.core.slack_contract import RecipientSelector
 from src.core.contracts.graph_state import SessionMetadata
-from tests.core.test_pending_action_delivery import delivery_tools
+from tests.core.test_pending_request_delivery import delivery_tools
 from tests.core.test_request_contract_retries import _SaveConversation, _fail_save_publication
 
 
@@ -22,7 +22,7 @@ def test_body_correction_preserves_unknown_delivery_for_the_original_payload(del
     first = conversation.turn("첫 본문을 작성해서 C123으로 보내줘",
         body={"kind": "compose", "instruction": "첫 본문 작성", "evidence_ids": ["request"]},
         actions=send, slack_recipient=recipient)
-    original = first["runtime"].pending_action.slack_delivery
+    original = first["runtime"].pending_request.slack_delivery
 
     corrected_recipient = {**recipient, "selector": {"kind": "channel", "value": corrected_channel}}
     second = conversation.turn(f"본문을 새 내용으로 바꿔서 {corrected_channel}으로 보내줘", relation="correction",
@@ -35,8 +35,8 @@ def test_body_correction_preserves_unknown_delivery_for_the_original_payload(del
     assert receipt.previous_slack == original
     assert "수정된 본문은 전송하지 않았습니다" in receipt.message
     assert export_answer_text(corrected) == "수정 본문"
-    assert export_answer_text(second["runtime"].pending_action.response) == "수정 본문"
-    assert second["runtime"].pending_action.slack_delivery == original
+    assert export_answer_text(second["runtime"].pending_request.response) == "수정 본문"
+    assert second["runtime"].pending_request.slack_delivery == original
     payload = "원래 본문".encode("utf-8")
     assert original.operation.payload_sha256 == hashlib.sha256(payload).hexdigest()
     assert original.operation.byte_count == len(payload)
@@ -66,7 +66,7 @@ def test_body_correction_preserves_unknown_delivery_for_the_original_payload(del
     assert new_delivery.operation.operation_id != original.operation.operation_id
     assert new_delivery.operation.payload_sha256 == original.operation.payload_sha256
     assert fresh["response"].result.actions[0].previous_slack is None
-    assert fresh["runtime"].pending_action is None
+    assert fresh["runtime"].pending_request is None
     assert len([request for request in requests if request["path"] == "/chat.postMessage"]) == 2
 
 
@@ -82,7 +82,7 @@ def test_implicit_pending_followup_does_not_repeat_an_unknown_delivery(delivery_
             actions={name: {"intent": "requested", "evidence_ids": ["request"]} for name in ("save_text", "slack_notify")},
             slack_recipient={"state": "explicit", "selector": {"kind": "channel", "value": "C123"}, "evidence_ids": ["request"]},
         )
-    original = first["runtime"].pending_action.slack_delivery
+    original = first["runtime"].pending_request.slack_delivery
     assert original.status == "unknown"
 
     second = conversation.turn(
@@ -106,18 +106,18 @@ def test_conflicting_recipient_needs_explicit_confirmation_before_a_pending_send
         actions={"slack_notify": {"intent": "requested", "evidence_ids": ["request"]}},
         slack_recipient={"state": "explicit", "selector": {"kind": "channel", "value": "C123"}, "evidence_ids": ["request"]})
     assert requests == []
-    assert first["runtime"].pending_action.slack_delivery.failure.code == "recipient_conflict"
+    assert first["runtime"].pending_request.slack_delivery.failure.code == "recipient_conflict"
 
     second = conversation.turn("남은 전송을 다시 시도해줘", relation="supplement", actions={})
     assert requests == []
-    assert second["runtime"].pending_action.slack_delivery.failure.code == "recipient_conflict"
+    assert second["runtime"].pending_request.slack_delivery.failure.code == "recipient_conflict"
 
     third = conversation.turn("수신자는 C123이 맞아", relation="supplement", actions={},
         slack_recipient={"state": "explicit", "selector": {"kind": "channel", "value": "C123"}, "evidence_ids": ["request"]})
     assert [request["payload"] for request in requests if request["path"] == "/chat.postMessage"] == [
         {"channel": "C123", "text": "확인 후 전달할 본문"},
     ]
-    assert third["runtime"].pending_action is None
+    assert third["runtime"].pending_request is None
 
 
 @pytest.mark.parametrize("delivery_tools", [{
@@ -132,7 +132,7 @@ def test_current_email_reconfirmation_preserves_the_resolved_pending_user(delive
     first = conversation.turn("intended@example.invalid로 보내줘",
         body={"kind": "compose", "instruction": "본문을 작성해", "evidence_ids": ["request"]},
         actions={"slack_notify": {"intent": "requested", "evidence_ids": ["request"]}}, slack_recipient=intent)
-    original = first["runtime"].pending_action
+    original = first["runtime"].pending_request
     assert original.slack_delivery.resolved_user_id == "UINTENDED"
     assert all(request["path"] != "/chat.postMessage" for request in requests)
 
@@ -159,7 +159,7 @@ def test_incomplete_sidebar_recipient_blocks_only_send_and_recovers_after_correc
         actions={"slack_notify": {"intent": "requested", "evidence_ids": ["request"]}})
 
     assert requests == []
-    pending = first["runtime"].pending_action
+    pending = first["runtime"].pending_request
     assert pending.body_prepared
     assert pending.slack_delivery.failure.code == "recipient_invalid"
     assert pending.slack_delivery.failure.next_action == "correct_input"
@@ -167,17 +167,17 @@ def test_incomplete_sidebar_recipient_blocks_only_send_and_recovers_after_correc
 
     repeated = conversation.turn("다시 보내줘", relation="supplement", actions={},
         session_metadata=SessionMetadata(slack_recipient={"kind": "channel", "value": value}))
-    assert repeated["runtime"].pending_action.response.content == pending.response.content
+    assert repeated["runtime"].pending_request.response.content == pending.response.content
     assert requests == []
 
     omitted = conversation.turn("다시 보내줘", relation="supplement", actions={})
-    assert omitted["runtime"].pending_action.slack_delivery.failure.code == "recipient_invalid"
+    assert omitted["runtime"].pending_request.slack_delivery.failure.code == "recipient_invalid"
     assert requests == []
 
     second = conversation.turn("수신자를 고쳤으니 다시 보내줘", relation="supplement", actions={},
         session_metadata=SessionMetadata(slack_recipient={"kind": "channel", "value": "C123"}))
 
-    assert second["runtime"].pending_action is None
+    assert second["runtime"].pending_request is None
     receipt = second["response"].result.actions[0]
     assert receipt.status == "success"
     assert [request["payload"] for request in requests] == [
@@ -193,13 +193,13 @@ def test_changing_sidebar_recipient_never_resends_an_unknown_delivery(delivery_t
         session_metadata=SessionMetadata(slack_recipient={"kind": "channel", "value": "C123"}),
         body={"kind": "compose", "instruction": "설명을 작성해", "evidence_ids": ["request"]},
         actions={"slack_notify": {"intent": "requested", "evidence_ids": ["request"]}})
-    original = first["runtime"].pending_action.slack_delivery
+    original = first["runtime"].pending_request.slack_delivery
     assert original.status == "unknown"
 
     second = conversation.turn("다시 보내줘", relation="supplement", actions={},
         session_metadata=SessionMetadata(slack_recipient={"kind": "channel", "value": "COTHER"}))
 
-    assert second["runtime"].pending_action.slack_delivery == original
+    assert second["runtime"].pending_request.slack_delivery == original
     assert second["response"].result.actions[0].status == "unknown"
     assert len(requests) == 1
     assert requests[0]["payload"]["channel"] == "C123"

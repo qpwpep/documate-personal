@@ -17,7 +17,6 @@ from src.core.contracts.debug import (
 )
 from src.core.planner_schema import InitialPlannerOutput, PlannerOutput, RetrievalRewriteOutput, RetrievalTask
 from src.core.request_contracts import RequestContract, validate_contract_evidence
-from src.core.slack_contract import SlackDelivery
 from src.infra.logging_utils import log_event
 from src.infra.llm_boundary import run_structured_call
 from src.runtime.nodes.planner.guardrails import apply_retrieval_availability
@@ -25,7 +24,7 @@ from src.runtime.nodes.planner.models import PlannerDecision
 from src.runtime.nodes.planner.prompt_builder import build_planner_messages, planner_previous_answer, planner_user_utterances
 from src.runtime.nodes.planner.query_sanitizer import ground_planner_requirement_aspects, validate_upload_source_references
 from src.runtime.nodes.planner.request_resolution import (
-    current_recipient_evidence_ids, pending_body_changed, pending_recipient_changed, resolve_request_contract,
+    current_recipient_evidence_ids, resolve_request_contract,
 )
 
 logger = logging.getLogger(__name__)
@@ -228,51 +227,13 @@ def make_planner_node(
             })
 
         runtime_updates = {"request_contract": contract}
-        if (is_initial_plan and runtime.pending_action is not None and contract.relation in {"correction", "supplement"}
-                and contract.target_request_id == runtime.pending_action.contract.request_id):
-            completed = tuple(name for name in runtime.pending_action.completed_actions
-                              if getattr(contract.actions, name).intent != "requested")
-            pending_updates = {"contract": contract, "completed_actions": completed}
-            body_changed = pending_body_changed(runtime.pending_action, contract)
-            if (pending_recipient_changed(runtime.pending_action, contract)
-                    and (runtime.pending_action.slack_delivery is None
-                         or runtime.pending_action.slack_delivery.status != "unknown")):
-                pending_updates["slack_delivery"] = None
-            elif (runtime.pending_action.slack_delivery is not None
-                  and runtime.pending_action.slack_delivery.selection is None
-                  and runtime.pending_action.slack_delivery.intent.state == "unresolved"
-                  and contract.slack_recipient.state == "explicit"
-                  and current_recipient_evidence_ids(contract, current_turn_id=runtime.current_turn_id,
-                                                     current_utterance=runtime.user_input)):
-                # A fresh confirmation may resolve a prior text/input conflict;
-                # an existing selected identity never needs resolution again.
-                pending_updates["slack_delivery"] = None
-            elif ("slack_notify" in runtime.pending_action.completed_actions
-                  and contract.actions.slack_notify.intent == "requested"
-                  and runtime.pending_action.slack_delivery is not None
-                  and runtime.pending_action.slack_delivery.status == "sent"):
-                # Current, grounded send authorization creates a new obligation;
-                # retain the selected identity instead of reusing its old success.
-                pending_updates["slack_delivery"] = SlackDelivery.model_validate({
-                    **runtime.pending_action.slack_delivery.model_dump(),
-                    "status": "pending", "failure": None, "message_ts": None,
-                    "operation": None, "invocation_id": None,
-                })
-            if (body_changed and "slack_delivery" not in pending_updates
-                    and runtime.pending_action.slack_delivery is not None
-                    and runtime.pending_action.slack_delivery.status in {"pending", "not_sent"}):
-                pending_updates["slack_delivery"] = runtime.pending_action.slack_delivery.model_copy(update={
-                    "operation": None, "invocation_id": None,
-                })
-            if body_changed or ("save_text" in runtime.pending_action.completed_actions
-                                and contract.actions.save_text.intent == "requested"):
-                # Replace the obligation when the change is accepted, including
-                # corrections whose body will only be ready on a later turn.
-                pending_updates.update(save_operation=None, save_receipt=None)
-            if body_changed or contract.body.kind != "copy_answer":
-                pending_updates["body_prepared"] = False
-                pending_updates["phase"] = "awaiting_body" if contract.can_prepare_body() else "awaiting_input"
-            runtime_updates["pending_action"] = runtime.pending_action.model_copy(update=pending_updates)
+        if (is_initial_plan and runtime.pending_request is not None and contract.relation in {"correction", "supplement"}
+                and contract.target_request_id == runtime.pending_request.contract.request_id):
+            runtime_updates["pending_request"] = runtime.pending_request.reconcile(
+                contract, recipient_confirmed=bool(current_recipient_evidence_ids(
+                    contract, current_turn_id=runtime.current_turn_id, current_utterance=runtime.user_input,
+                )),
+            )
         updates: GraphState = {
             "runtime": runtime.model_copy(update=runtime_updates),
             "planner": PlannerState(

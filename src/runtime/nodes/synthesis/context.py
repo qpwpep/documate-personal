@@ -33,7 +33,7 @@ def resolve_contract_source_response(runtime: RuntimeState) -> AnswerResponse | 
         return None
     return resolve_body_response(
         contract, previous_response=runtime.previous_response,
-        pending_response=runtime.pending_action.response if runtime.pending_action else None,
+        pending_response=runtime.pending_request.response if runtime.pending_request else None,
     )
 
 

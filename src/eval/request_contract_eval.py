@@ -58,7 +58,7 @@ def build_case_state(case: dict) -> tuple[dict, dict]:
     from langchain_core.messages import AIMessage, HumanMessage
     from src.core.answer_schema import finalize_answer, text_document
     from src.core.contracts.boundary.graph import build_graph_state_input
-    from src.core.contracts.graph_state import PendingAction
+    from src.core.contracts.graph_state import PendingRequest
     from src.core.request_contracts import RequestContract, UserTurnSnapshot
 
     context = case["context"]
@@ -93,11 +93,11 @@ def build_case_state(case: dict) -> tuple[dict, dict]:
                                                    if pending_data["recipient"]["state"] != "omitted" else {})},
             "missing_info": [{"slot": "slack_destination", "reason": "not_provided", "question": "어느 Slack 채널로 보낼까요?"}],
         })
-        pending = PendingAction(contract=contract, response=pending_response, phase=pending_data["phase"],
+        pending = PendingRequest(contract=contract, response=pending_response, phase=pending_data["phase"],
                                 completed_actions=tuple(pending_data["completed_actions"]), body_prepared=True)
     state = build_graph_state_input(
         user_input=case["query"], current_turn_id=current_turn_id, user_turns=tuple(user_turns),
-        messages=messages, previous_response=previous_response, pending_action=pending,
+        messages=messages, previous_response=previous_response, pending_request=pending,
     )
     evaluation_context = {
         "current_turn_id": current_turn_id, "user_turns": {turn.turn_id: turn.text for turn in user_turns},
@@ -241,7 +241,7 @@ def make_live_observer(settings: Any, *, body_semantic_assessor: Callable[[dict,
             "disposition": disposition, "context": context,
             "body_preparable": contract.can_prepare_body() if contract else False,
             "planner": planner.model_dump(mode="json") if planner else None,
-            "pending_after": runtime.pending_action.model_dump(mode="json") if runtime and runtime.pending_action else None,
+            "pending_after": runtime.pending_request.model_dump(mode="json") if runtime and runtime.pending_request else None,
         }
         if observation["contract_accepted"]:
             semantic_started = time.perf_counter()

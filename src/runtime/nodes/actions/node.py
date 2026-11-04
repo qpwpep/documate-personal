@@ -5,25 +5,25 @@ from collections.abc import Callable
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from src.core.answer_schema import ActionReceipt, AnswerResponse, export_answer_text
-from src.core.answer_export import answer_export_key, answer_export_snapshot, build_answer_export_operation
+from src.core.answer_schema import ActionReceipt, export_answer_text
+from src.core.answer_export import answer_export_key, answer_export_snapshot
 from src.core.contracts import GraphState
-from src.core.contracts.graph_state import PendingAction
+from src.core.pending_request import PendingRequest
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.planner import get_planner_state
 from src.core.contracts.boundary.response import get_response_state
 from src.core.contracts.boundary.runtime import get_runtime_state
 from src.core.message_utils import build_tool_message
 from src.core.llm_errors import LLMCallError
-from src.core.request_contracts import check_answer_contract, resolve_body_response
+from src.core.request_contracts import resolve_body_response
 from src.core.save_contract import SaveOperation, SaveToolResult
 from src.infra.logging_utils import log_event
 from src.infra.llm_boundary import check_request_deadline
-from src.infra.answer_export import select_current_save_operation
+from src.infra.answer_export import build_save_failure, build_save_receipt, execute_save, select_answer_save_operation
 from src.infra.saved_artifacts import ArtifactError
 from src.runtime.nodes.actions.policy import select_slack_delivery
 from src.core.slack_contract import SlackDefault, SlackDelivery
-from src.runtime.nodes.actions.receipts import build_save_failure, build_save_receipt, build_slack_receipt
+from src.runtime.nodes.actions.receipts import build_slack_receipt
 from src.runtime.agent_runtime.tool_execution import invoke_tool, record_nonexecution
 
 
@@ -34,11 +34,10 @@ def _save_operation(*, contract, runtime, pending, response, body: str) -> SaveO
     prior = pending.save_operation if pending and pending.contract.request_id == contract.request_id else None
     scope = runtime.session_id or contract.request_id
     if contract.body.kind == "copy_answer":
-        operation = (runtime.answer_export_operations.get(answer_export_key(response.result))
-                     or prior or build_answer_export_operation(response.result, session_id=scope))
-        if operation.session_id != scope or not operation.matches_bytes(body.encode("utf-8-sig")):
-            raise ArtifactError("idempotency_conflict", "선택한 저장 작업의 본문과 세션이 다릅니다.")
-        return select_current_save_operation(operation)
+        return select_answer_save_operation(
+            response.result, session_id=scope,
+            remembered=runtime.answer_export_operations.get(answer_export_key(response.result)), pending=prior,
+        )
     if prior is not None and prior.request_id == contract.request_id and prior.session_id == scope:
         # Request reconciliation already discarded replaced obligations. A
         # surviving operation stays frozen across retries and destination edits.
@@ -51,26 +50,6 @@ def _save_operation(*, contract, runtime, pending, response, body: str) -> SaveO
         session_id=scope,
         request_id=contract.request_id, contract_revision=contract.revision,
         target_kind=contract.body.kind, source_hash=source_hash, answer_hash=response.result.content_hash,
-    )
-
-
-def _answer_conditions_ready(contract, answer: AnswerResponse) -> bool:
-    check = check_answer_contract(
-        contract.answer, answer.content,
-        evidence=[citation.evidence for citation in answer.citations],
-    )
-    if not check.valid:
-        return False
-    if not check.unchecked_semantic:
-        return True
-    try:
-        # Reuse the answer boundary's content/source revision checks rather
-        # than trusting a report carried through an unchecked model_copy.
-        report = AnswerResponse.model_validate(answer.model_dump(mode="json")).semantic_validation
-    except ValueError:
-        return False
-    return report is not None and report.passed and any(
-        item.name == "request_fulfilled" and item.unit_id is None for item in report.checks
     )
 
 
@@ -107,31 +86,6 @@ def _action_question(contract, action: str) -> str:
     return question or ("이 본문을 파일로 저장할까요?" if action == "save_text" else "이 본문을 Slack으로 보낼까요?")
 
 
-def _pending_response(*, contract, runtime, pending, response, body_ready: bool) -> AnswerResponse | None:
-    if body_ready:
-        return response.result.model_copy(update={"actions": []}, deep=True)
-    if pending is not None and pending.contract.request_id == contract.request_id:
-        return pending.response.model_copy(deep=True) if pending.response is not None else None
-    source = resolve_body_response(
-        contract, previous_response=runtime.previous_response,
-        pending_response=pending.response if pending else None,
-    )
-    return source.model_copy(update={"actions": []}, deep=True) if source is not None else None
-
-
-def _prepared_pending_body(*, contract, pending, body_ready: bool) -> bool:
-    if body_ready:
-        return True
-    return bool(
-        pending is not None and pending.body_prepared and pending.response is not None
-        and pending.contract.request_id == contract.request_id
-        and contract.can_prepare_body() and contract.body.kind == "copy_answer"
-        and contract.body.source.ref == "pending"
-        and contract.body.source.response_hash == pending.response.content_hash
-        and _answer_conditions_ready(contract, pending.response)
-    )
-
-
 def make_action_postprocess_node(
     save_text_tool: Callable[..., SaveToolResult], slack_notify_tool: Callable[..., SlackDelivery], verbose: bool,
     default_slack_recipient: SlackDefault | None = None,
@@ -143,7 +97,7 @@ def make_action_postprocess_node(
         contract = runtime.request_contract
         if contract is None:
             return {}
-        pending = runtime.pending_action
+        pending = runtime.pending_request
         if any(item.slot == "pending_request" for item in contract.missing_info):
             return {}
         if contract.target_request_id is not None and (
@@ -157,15 +111,15 @@ def make_action_postprocess_node(
         if contract.can_acknowledge() and contract.relation != "cancel":
             if (pending is not None and contract.relation in {"correction", "supplement"}
                     and contract.target_request_id == pending.contract.request_id):
-                updates["runtime"] = runtime.model_copy(update={"pending_action": None})
+                updates["runtime"] = runtime.model_copy(update={"pending_request": None})
             return updates
         if (contract.relation == "new" or cancellation_resolved) and pending is not None:
-            updates["runtime"] = runtime.model_copy(update={"pending_action": None})
+            updates["runtime"] = runtime.model_copy(update={"pending_request": None})
         if cancellation_resolved:
             return updates
         if contract.relation == "cancel":
             if pending is not None:
-                updates["runtime"] = runtime.model_copy(update={"pending_action": pending.model_copy(
+                updates["runtime"] = runtime.model_copy(update={"pending_request": pending.model_copy(
                     update={"contract": contract, "phase": "awaiting_input"}, deep=True,
                 )})
             return updates
@@ -185,18 +139,16 @@ def make_action_postprocess_node(
         if not any(intent == "requested" for intent in intents.values()) and not waiting_intents:
             if not body_ready:
                 completed = pending.completed_actions if pending is not None and pending.contract.request_id == contract.request_id else ()
-                updates["runtime"] = runtime.model_copy(update={"pending_action": PendingAction(
-                    contract=contract,
-                    response=_pending_response(contract=contract, runtime=runtime, pending=pending,
-                                               response=response, body_ready=False),
-                    phase="awaiting_body" if contract.can_prepare_body() else "awaiting_input",
-                    completed_actions=completed, body_prepared=False,
-                    save_operation=pending.save_operation if pending and pending.contract.request_id == contract.request_id else None,
-                    save_receipt=pending.save_receipt if pending and pending.contract.request_id == contract.request_id else None,
-                    slack_delivery=pending.slack_delivery if pending and pending.contract.request_id == contract.request_id else None,
+                same_request = pending is not None and pending.contract.request_id == contract.request_id
+                updates["runtime"] = runtime.model_copy(update={"pending_request": PendingRequest.after_execution(
+                    contract=contract, previous_response=runtime.previous_response, pending=pending,
+                    response=response.result, body_ready=False, completed_actions=completed,
+                    save_operation=pending.save_operation if same_request else None,
+                    save_receipt=pending.save_receipt if same_request else None,
+                    slack_delivery=pending.slack_delivery if same_request else None, receipts=[],
                 )})
             elif pending is not None and contract.relation in {"supplement", "correction"}:
-                updates["runtime"] = runtime.model_copy(update={"pending_action": None})
+                updates["runtime"] = runtime.model_copy(update={"pending_request": None})
             return updates
         debug = get_debug_state(state)
         body = export_answer_text(response.result, include_sources=True) if body_ready else ""
@@ -215,7 +167,6 @@ def make_action_postprocess_node(
         action_errors: list[str] = []
         error_codes = []
         needs_destination = False
-        needs_intent = bool(waiting_intents)
 
         if intents["save_text"] == "requested" and "save_text" not in completed:
             if contract.execution_ready("save_text", body_ready=body_ready):
@@ -229,8 +180,11 @@ def make_action_postprocess_node(
                         raise ArtifactError("idempotency_conflict", "재시도 본문이 확정된 저장 대상과 다릅니다.")
                     invocation_id = uuid4().hex
                     check_request_deadline("action_postprocess")
-                    result = invoke_tool("save_text", save_text_tool, execution_id=invocation_id,
-                                         content=body, operation=save_operation)
+                    receipt = execute_save(
+                        lambda: invoke_tool("save_text", save_text_tool, invocation_id=invocation_id,
+                                            content=body, operation=save_operation),
+                        operation=save_operation, invocation_id=invocation_id,
+                    )
                 except LLMCallError:
                     # A request deadline is not a failed filesystem write.
                     raise
@@ -239,8 +193,6 @@ def make_action_postprocess_node(
                         exc.code if isinstance(exc, ArtifactError) else "write_failed", str(exc),
                         operation=save_operation, invocation_id=invocation_id,
                     )
-                else:
-                    receipt = build_save_receipt(result, operation=save_operation, invocation_id=invocation_id)
                 save_receipt = receipt
                 messages.append(build_tool_message("save_text", {
                     **receipt.model_dump(mode="json", exclude_none=True),
@@ -303,7 +255,7 @@ def make_action_postprocess_node(
                             check_request_deadline("action_postprocess")
                             invocation_id = uuid4().hex
                             slack_delivery = slack_delivery.bind_text(body)
-                            result = invoke_tool("slack_notify", slack_notify_tool, execution_id=invocation_id,
+                            result = invoke_tool("slack_notify", slack_notify_tool, invocation_id=invocation_id,
                                                  text=body, delivery=slack_delivery)
                             slack_delivery = result.model_copy(update={"invocation_id": invocation_id})
                         except LLMCallError as exc:
@@ -341,30 +293,14 @@ def make_action_postprocess_node(
                 "result": response.result.model_copy(update={"actions": [*response.result.actions, *receipts]}),
                 "save_operation_binding_sha256": save_operation.binding_sha256 if save_operation is not None else None,
             })
-        waiting_for_body = not body_ready and any(intent == "requested" for intent in intents.values())
-        waiting_for_delivery = bool(action_errors) or bool(
-            intents["slack_notify"] == "requested" and slack_delivery is not None
-            and slack_delivery.status != "sent" and not needs_destination and body_ready
-        )
-        phase = ("awaiting_input" if needs_intent or not contract.can_prepare_body() else
-                 "awaiting_body" if waiting_for_body else
-                 "awaiting_delivery" if waiting_for_delivery else "awaiting_destination")
-        next_pending = (
-            PendingAction(
-                contract=contract,
-                response=_pending_response(contract=contract, runtime=runtime, pending=pending,
-                                           response=response, body_ready=body_ready),
-                completed_actions=tuple(sorted(completed)),
-                save_operation=save_operation,
-                save_receipt=save_receipt,
-                slack_delivery=slack_delivery,
-                phase=phase,
-                body_prepared=_prepared_pending_body(contract=contract, pending=pending, body_ready=body_ready),
-            )
-            if needs_destination or needs_intent or waiting_for_body or waiting_for_delivery else None
+        next_pending = PendingRequest.after_execution(
+            contract=contract, previous_response=runtime.previous_response, pending=pending,
+            response=response.result, body_ready=body_ready, completed_actions=tuple(sorted(completed)),
+            save_operation=save_operation, save_receipt=save_receipt, slack_delivery=slack_delivery,
+            receipts=receipts, needs_destination=needs_destination,
         )
         if next_pending is not None or pending is not None:
-            updates["runtime"] = runtime.model_copy(update={"pending_action": next_pending})
+            updates["runtime"] = runtime.model_copy(update={"pending_request": next_pending})
         if messages:
             updates["messages"] = messages
         if action_errors or error_codes:

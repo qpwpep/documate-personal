@@ -272,8 +272,8 @@ class AgentFlowManager:
                 messages=durable_memory.messages,
                 memory_summary=durable_memory.memory_summary,
                 user_turns=final_runtime.user_turns,
-                preserve_turn_ids=required_contract_turn_ids(final_runtime.pending_action.contract)
-                if final_runtime.pending_action is not None else (),
+                preserve_turn_ids=required_contract_turn_ids(final_runtime.pending_request.contract)
+                if final_runtime.pending_request is not None else (),
             )
             # A failed copy/transform cannot replace the selected source answer
             # with its fallback, regardless of how the result was to be delivered.
@@ -287,7 +287,7 @@ class AgentFlowManager:
                 response=final_response_state.result,
                 response_kind=final_response_state.kind,
                 displayed_partial=assembled_response["status"] == "partial" and not answer_reuse_failed,
-                pending_action=final_runtime.pending_action,
+                pending_request=final_runtime.pending_request,
             )
             self.session.answer_export_operations.update(final_runtime.answer_export_operations)
             if (not answer_reuse_failed and assembled_response["response"] is not None
@@ -333,8 +333,8 @@ class AgentFlowManager:
         # A completed or uncertain external effect must remain visible and must
         # not become a fresh delivery on a follow-up. This is delivery bookkeeping,
         # not a successful conversation/answer commit for the timed-out request.
-        self.session.pending_action = (
-            runtime.pending_action.model_copy(deep=True) if runtime.pending_action is not None else None
+        self.session.pending_request = (
+            runtime.pending_request.model_copy(deep=True) if runtime.pending_request is not None else None
         )
         self.session.answer_export_operations.update(runtime.answer_export_operations)
         result.update(TurnResult(

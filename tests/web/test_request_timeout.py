@@ -16,7 +16,7 @@ from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import WireRequestContract
 from src.infra.llm_boundary import remaining_request_seconds, request_deadline
 from src.infra.settings import AppSettings
-from tests.core.test_pending_action_delivery import delivery_tools
+from tests.core.test_pending_request_delivery import delivery_tools
 
 
 @pytest.fixture

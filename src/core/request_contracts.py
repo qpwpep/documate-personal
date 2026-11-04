@@ -67,7 +67,7 @@ class ContentRequirement(ContractModel):
     mode: RequirementMode
     description: str = ""
     evidence_ids: tuple[str, ...] = ()
-    replaces: str | None = Field(default=None, min_length=1, description="For a change to one pending content condition, copy its offered ref from pending_action.confirmed_facts.answer.content. Null adds an independent condition. Never invent a ref; it is valid only for the offered request revision.")
+    replaces: str | None = Field(default=None, min_length=1, description="For a change to one pending content condition, copy its offered ref from pending_request.confirmed_facts.answer.content. Null adds an independent condition. Never invent a ref; it is valid only for the offered request revision.")
 
     @property
     def condition_key(self) -> tuple[str, str]:

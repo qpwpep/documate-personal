@@ -23,7 +23,7 @@ from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
 from tests.core.helpers import SequentialGraph, make_decisions_client, mock_chat_model, structured_model
 from tests.core.test_decisions_validation import _state
-from tests.core.test_pending_action_delivery import _manager
+from tests.core.test_pending_request_delivery import _manager
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
@@ -193,7 +193,7 @@ def test_export_failure_feedback_does_not_replace_target_of_a_followup_retry(tmp
     assert failed["status"] == "failed"
     assert failed["answer_id"] is None
     assert manager.session.previous_response == source
-    assert manager.session.pending_action is None
+    assert manager.session.pending_request is None
     assert list(tmp_path.glob("*.txt")) == []
 
     retried = manager.run_agent_flow("방금 답변을 출처와 함께 txt 파일로 저장해줘")
@@ -228,7 +228,7 @@ def test_failed_transformation_keeps_original_answer_as_retry_target(tmp_path, m
     assert failed["problem"]["code"] == "answer_validation_failed"
     assert failed["answer_id"] is None
     assert manager.session.previous_response == source
-    assert manager.session.pending_action is None
+    assert manager.session.pending_request is None
     assert manager.session.snapshot_conversation_memory() == memory_before
     assert list(tmp_path.glob("*.txt")) == []
 

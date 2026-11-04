@@ -7,7 +7,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from src.core.contracts.boundary.graph import build_graph_state_input
-from src.core.contracts.graph_state import PendingAction
+from src.core.contracts.graph_state import PendingRequest
 from src.core.llm_errors import LLMCallError
 from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import ContentRequirement, LayoutRequirement, LineCountRequirement, UserTurnSnapshot, WireRequestContract
@@ -50,7 +50,7 @@ def _state(query, pending=None, *, turn_id="current", history=()):
         user_input=query, current_turn_id=turn_id,
         messages=[HumanMessage(content=query, id=turn_id)],
         user_turns=(*history, UserTurnSnapshot(turn_id=turn_id, text=query)),
-        pending_action=pending,
+        pending_request=pending,
     )
 
 
@@ -79,7 +79,7 @@ def test_supplement_preserves_independent_conditions_of_the_same_kind(kind):
         {"kind": kind, "mode": "required", "description": "시간복잡도를 설명한다"},
         {"kind": kind, "mode": "required", "description": "메모리복잡도를 설명한다"},
     ])
-    pending = PendingAction(contract=initial["runtime"].request_contract, phase="awaiting_body")
+    pending = PendingRequest(contract=initial["runtime"].request_contract, phase="awaiting_body")
     result = _plan("한계도 설명해줘.", pending=pending, relation="supplement", turn_id="followup", content=[
         {"kind": kind, "mode": "required", "description": "한계를 설명한다"},
     ])
@@ -97,11 +97,11 @@ def test_correction_replaces_only_the_selected_condition_even_when_reworded():
         {"kind": "custom", "mode": "required", "description": "시간복잡도를 설명한다"},
         {"kind": "custom", "mode": "required", "description": "메모리복잡도를 설명한다"},
     ])
-    pending = PendingAction(contract=initial["runtime"].request_contract, phase="awaiting_body")
+    pending = PendingRequest(contract=initial["runtime"].request_contract, phase="awaiting_body")
     query = "시간복잡도 대신 실행 시간 측정 결과를 설명해줘."
 
     def correction(context):
-        target = next(item for item in context["pending_action"]["confirmed_facts"]["answer"]["content"]
+        target = next(item for item in context["pending_request"]["confirmed_facts"]["answer"]["content"]
                       if item["description"] == "시간복잡도를 설명한다")
         return _facts(query, pending=pending, relation="correction", turn_id="followup", content=[
             {"kind": "custom", "mode": "required", "description": "실행 시간 측정 결과를 설명한다",
@@ -124,11 +124,11 @@ def test_past_instruction_and_unrelated_current_evidence_cannot_correct_content(
         {"kind": "custom", "mode": "required", "description": "시간복잡도를 설명한다"},
         {"kind": "custom", "mode": "required", "description": "메모리복잡도를 설명한다"},
     ])
-    pending = PendingAction(contract=initial["runtime"].request_contract, phase="awaiting_body")
+    pending = PendingRequest(contract=initial["runtime"].request_contract, phase="awaiting_body")
     query = "문구는 '실행 시간 측정 결과를 설명한다'야."
 
     def correction(context):
-        target = context["pending_action"]["confirmed_facts"]["answer"]["content"][0]
+        target = context["pending_request"]["confirmed_facts"]["answer"]["content"][0]
         proposal = _facts(query, pending=pending, relation="correction", turn_id="followup", content=[
             {"kind": "custom", "mode": "required", "description": "실행 시간 측정 결과를 설명한다",
              "replaces": target["ref"]},
@@ -142,11 +142,11 @@ def test_past_instruction_and_unrelated_current_evidence_cannot_correct_content(
     state = _state(query, pending, turn_id="followup", history=[
         UserTurnSnapshot(turn_id="current", text=previous_query),
     ])
-    before = state["runtime"].pending_action.model_dump()
+    before = state["runtime"].pending_request.model_dump()
     with pytest.raises(LLMCallError) as caught:
         make_planner_node(structured_model(PlannerBoundary(correction).invoke, InitialPlannerOutput), False)(state)
     assert caught.value.problem.code == "model_output_invalid"
-    assert state["runtime"].pending_action.model_dump() == before
+    assert state["runtime"].pending_request.model_dump() == before
 
 
 @pytest.mark.parametrize("incoming,expected", [
@@ -158,7 +158,7 @@ def test_line_count_changes_preserve_independent_forbidden_values(incoming, expe
         {"kind": "line_count", "mode": "required", "value": 3},
         {"kind": "line_count", "mode": "forbidden", "value": 4},
     ])
-    pending = PendingAction(contract=initial["runtime"].request_contract, phase="awaiting_body")
+    pending = PendingRequest(contract=initial["runtime"].request_contract, phase="awaiting_body")
     result = _plan("다섯 줄로 고쳐줘." if incoming["mode"] == "required" else "여섯 줄도 쓰지 마.",
                    pending=pending, relation="correction", turn_id="followup", format=[incoming])
 
@@ -172,12 +172,12 @@ def test_invalid_correction_targets_leave_pending_state_unchanged(invalid_target
         {"kind": "custom", "mode": "required", "description": "메모리복잡도를 설명한다"},
     ])
     original = initial["runtime"].request_contract
-    pending = PendingAction(contract=original.model_copy(update={"revision": 2}),
+    pending = PendingRequest(contract=original.model_copy(update={"revision": 2}),
                             phase="awaiting_body", completed_actions=("save_text",))
     query = "시간복잡도 대신 실행 시간 측정 결과를 설명해줘."
 
     def correction(context):
-        ref = context["pending_action"]["confirmed_facts"]["answer"]["content"][0]["ref"]
+        ref = context["pending_request"]["confirmed_facts"]["answer"]["content"][0]["ref"]
         if invalid_target == "unknown":
             ref = "not-an-offered-condition"
         elif invalid_target == "stale_revision":
@@ -193,11 +193,11 @@ def test_invalid_correction_targets_leave_pending_state_unchanged(invalid_target
                       turn_id="followup", content=content)
 
     state = _state(query, pending, turn_id="followup")
-    before = state["runtime"].pending_action.model_dump()
+    before = state["runtime"].pending_request.model_dump()
     with pytest.raises(LLMCallError) as caught:
         make_planner_node(structured_model(PlannerBoundary(correction).invoke, InitialPlannerOutput), False)(state)
     assert caught.value.problem.code == "model_output_invalid"
-    assert state["runtime"].pending_action.model_dump() == before
+    assert state["runtime"].pending_request.model_dump() == before
 
 
 def test_same_content_condition_cannot_be_required_and_forbidden():
@@ -214,11 +214,11 @@ def test_explicit_correction_can_reverse_one_condition_without_removing_others()
         {"kind": "custom", "mode": "required", "description": "시간복잡도를 설명한다"},
         {"kind": "custom", "mode": "required", "description": "메모리복잡도를 설명한다"},
     ])
-    pending = PendingAction(contract=initial["runtime"].request_contract, phase="awaiting_body")
+    pending = PendingRequest(contract=initial["runtime"].request_contract, phase="awaiting_body")
     query = "시간복잡도는 설명하지 마."
 
     def correction(context):
-        ref = context["pending_action"]["confirmed_facts"]["answer"]["content"][0]["ref"]
+        ref = context["pending_request"]["confirmed_facts"]["answer"]["content"][0]["ref"]
         return _facts(query, pending=pending, relation="correction", turn_id="followup", content=[
             {"kind": "custom", "mode": "forbidden", "description": "시간복잡도를 설명한다", "replaces": ref},
         ])

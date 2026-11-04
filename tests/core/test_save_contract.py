@@ -5,7 +5,7 @@ import pytest
 
 from src.core.answer_schema import ActionReceipt, finalize_answer, text_document
 from src.core.contracts import RuntimeState, PlannerState, ResponseState
-from src.core.contracts.graph_state import PendingAction
+from src.core.contracts.graph_state import PendingRequest
 from src.core.request_contracts import RequestContract
 from src.eval.config_models import BenchmarkCase
 from src.eval.decisions import policy_for_case
@@ -49,12 +49,12 @@ def test_reused_save_receipt_is_observed_without_tool_messages(tmp_path, monkeyp
     state = _save_state()
     node = make_action_postprocess_node(build_save_text_tool(), lambda **_: {}, False)
     receipt = node(state)["response"].result.actions[0]
-    pending = PendingAction(
+    pending = PendingRequest(
         contract=state["runtime"].request_contract, response=state["response"].result,
         body_prepared=True, completed_actions=("save_text",),
         save_operation=receipt.operation, save_receipt=receipt,
     )
-    state["runtime"] = state["runtime"].model_copy(update={"pending_action": pending})
+    state["runtime"] = state["runtime"].model_copy(update={"pending_request": pending})
 
     updates = node(state)
     debug = DebugCollector().build(
@@ -110,11 +110,11 @@ def test_rejected_save_reuse_records_new_blocked_attempt(tmp_path, monkeypatch, 
     contract = state["runtime"].request_contract
     with capture_tool_execution("request") as recorder:
         first = node(state)["response"].result.actions[0]
-        pending = PendingAction(
+        pending = PendingRequest(
             contract=contract, response=state["response"].result, body_prepared=True,
             completed_actions=("save_text",), save_operation=first.operation, save_receipt=first,
         )
-        state["runtime"] = state["runtime"].model_copy(update={"pending_action": pending})
+        state["runtime"] = state["runtime"].model_copy(update={"pending_request": pending})
         if failure == "changed_body":
             state["response"] = state["response"].model_copy(update={
                 "result": finalize_answer(text_document("변경된 저장 본문"), []),

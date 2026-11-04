@@ -9,7 +9,8 @@ from src.core.save_contract import SaveOperation
 
 from src.core.contracts.debug import RetryState
 from src.core.contracts.retrieval import UploadRetriever
-from src.core.contracts.graph_state import DebugState, GraphState, PendingAction, PlannerState, ResponseState, RetrievalState, RuntimeState, SessionMetadata
+from src.core.contracts.graph_state import DebugState, GraphState, PlannerState, ResponseState, RetrievalState, RuntimeState, SessionMetadata
+from src.core.pending_request import PendingRequest
 from src.core.request_contracts import RequestContract, UserTurnSnapshot
 from src.core.uploads import UploadFileInfo
 
@@ -28,7 +29,7 @@ def build_graph_state_input(
     memory_summary: str | None = None,
     previous_response: AnswerResponse | None = None,
     request_contract: RequestContract | None = None,
-    pending_action: PendingAction | None = None,
+    pending_request: PendingRequest | None = None,
     answer_export_operations: dict[str, SaveOperation] | None = None,
     planner: PlannerState | None = None,
     retrieval: RetrievalState | None = None,
@@ -51,7 +52,7 @@ def build_graph_state_input(
             progress_emitter=progress_emitter,
             previous_response=previous_response,
             request_contract=request_contract,
-            pending_action=pending_action,
+            pending_request=pending_request,
             answer_export_operations=answer_export_operations or {},
         ),
     }

@@ -19,7 +19,7 @@ from src.infra.tools.save_text import build_save_text_tool
 from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
 from tests.core.helpers import make_decisions_client
-from tests.core.test_pending_action_delivery import _contract, delivery_tools
+from tests.core.test_pending_request_delivery import _contract, delivery_tools
 
 
 def test_save_and_slack_retain_source_selection_and_limitations_without_mutating_answer(tmp_path: Path, delivery_tools):

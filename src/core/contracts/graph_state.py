@@ -8,9 +8,10 @@ from langgraph.graph import add_messages
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation, field_validator, model_validator
 from typing_extensions import TypedDict
 
-from src.core.answer_schema import ActionReceipt, AnswerResponse
+from src.core.answer_schema import AnswerResponse
 from src.core.save_contract import SaveOperation
-from src.core.slack_contract import RecipientInput, SlackDelivery
+from src.core.pending_request import PendingRequest
+from src.core.slack_contract import RecipientInput
 from src.core.evidence import EvidenceRef, SearchHit
 from src.core.decisions import prepared_packet_fingerprint
 from src.core.planner_schema import PlannerOutput
@@ -28,20 +29,6 @@ class SessionMetadata(BaseModel):
     slack_recipient: RecipientInput | None = None
 
 
-class PendingAction(BaseModel):
-    """An unfinished request owns its requirements and any checked body."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    contract: RequestContract
-    response: AnswerResponse | None = None
-    body_prepared: bool = False
-    phase: Literal["awaiting_input", "awaiting_body", "awaiting_destination", "awaiting_delivery"] = "awaiting_destination"
-    completed_actions: tuple[Literal["save_text", "slack_notify"], ...] = ()
-    save_operation: SaveOperation | None = None
-    save_receipt: ActionReceipt | None = None
-    slack_delivery: SlackDelivery | None = None
-
-
 class RuntimeState(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -57,7 +44,7 @@ class RuntimeState(BaseModel):
     progress_emitter: Any | None = None
     previous_response: AnswerResponse | None = None
     request_contract: RequestContract | None = None
-    pending_action: PendingAction | None = None
+    pending_request: PendingRequest | None = None
     answer_export_operations: dict[str, SaveOperation] = Field(default_factory=dict)
 
     @field_validator("user_turns")
@@ -77,7 +64,7 @@ class PlannerState(BaseModel):
 
 
 class EvidenceVerdict(BaseModel):
-    """A turn-local judgment of one immutable source for one fixed requirement."""
+    """A candidate judgment bound to its source, required context and requirement."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     requirement_id: str = Field(min_length=1)

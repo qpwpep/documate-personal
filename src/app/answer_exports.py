@@ -50,7 +50,7 @@ class AnswerExportService:
     ) -> AnswerExportResult:
         body = render_answer_text(snapshot, include_sources=True)
         key = answer_export_key(snapshot)
-        pending = session.pending_action
+        pending = session.pending_request
         matching_pending = bool(
             pending is not None and pending.body_prepared and pending.response is not None
             and pending.contract.action_requested("save_text")
@@ -80,7 +80,7 @@ class AnswerExportService:
             completed_actions = set(pending.completed_actions) | {"save_text"}
             waiting_slack = (pending.contract.actions.slack_notify.intent in {"requested", "unresolved"}
                              and "slack_notify" not in completed_actions)
-            session.pending_action = pending.model_copy(update={
+            session.pending_request = pending.model_copy(update={
                 "completed_actions": tuple(sorted(completed_actions)),
                 "save_operation": operation, "save_receipt": receipt,
             }) if waiting_slack else None

@@ -6,7 +6,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from src.core.answer_schema import finalize_answer, text_document
 from src.core.contracts.boundary.graph import build_graph_state_input
-from src.core.contracts.graph_state import PendingAction
+from src.core.contracts.graph_state import PendingRequest
 from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import RequestContract, UserTurnSnapshot, WireRequestContract
 from src.runtime.nodes.planner import make_planner_node
@@ -21,7 +21,7 @@ def test_planner_keeps_native_dialogue_and_binds_the_original_input(shared_pendi
     previous_text = "1. PREVIOUS_OPTION_139\n2. preserve numbered references"
     pending_text = previous_text if shared_pending_answer else "PENDING_BODY_957"
     previous = finalize_answer(text_document(previous_text), [])
-    pending = PendingAction(
+    pending = PendingRequest(
         contract=RequestContract(request_id="pending-request"),
         response=finalize_answer(text_document(pending_text), []),
         phase="awaiting_destination", body_prepared=True,
@@ -32,7 +32,7 @@ def test_planner_keeps_native_dialogue_and_binds_the_original_input(shared_pendi
                     UserTurnSnapshot(turn_id="current", text=current)),
         messages=[HumanMessage(id="original", content="TRIMMED_DIALOGUE_695"),
                   AIMessage(content=previous_text), HumanMessage(id="current", content=current)],
-        previous_response=previous, pending_action=pending,
+        previous_response=previous, pending_request=pending,
     )
     observed = []
 

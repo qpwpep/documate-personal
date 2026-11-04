@@ -118,7 +118,7 @@ def collect_validation_snapshot(state: GraphState, *, max_turns: int = 6) -> tup
     source_response = resolve_body_response(
         runtime.request_contract,
         previous_response=runtime.previous_response,
-        pending_response=runtime.pending_action.response if runtime.pending_action else None,
+        pending_response=runtime.pending_request.response if runtime.pending_request else None,
     ) if runtime.request_contract is not None else None
     if source_response is not None:
         source_response = AnswerResponse.model_validate(source_response.model_dump(mode="json"))

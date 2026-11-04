@@ -160,4 +160,4 @@ def test_sentence_condition_failure_after_repair_does_not_publish_or_save_the_so
     assert export_answer_text(result["response"].result) not in {ORIGINAL, REJECTED}
     assert result["response"].result.actions == []
     assert list(tmp_path.glob("*.txt")) == []
-    assert result["runtime"].pending_action.body_prepared is False
+    assert result["runtime"].pending_request.body_prepared is False

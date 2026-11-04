@@ -15,12 +15,12 @@ from src.app.web.app import create_app
 from src.app.web.session_store import InMemorySessionStore
 from src.core.answer_schema import AnswerResponse, ResponseIssue, export_answer_text, finalize_answer, text_document
 from src.core.answer_schema.models import SemanticCheck, SemanticValidation, semantic_evidence_fingerprint
-from src.core.contracts.graph_state import PendingAction
+from src.core.contracts.graph_state import PendingRequest
 from src.core.save_contract import SaveOperation
 from src.infra.settings import AppSettings
 from src.runtime.agent_runtime.session_context import SessionContext
 from tests.core.test_answer_validation import _evidence
-from tests.core.test_pending_action_delivery import _contract, _manager
+from tests.core.test_pending_request_delivery import _contract, _manager
 from tests.core.test_exact_answer_export import checked_source, export_graph
 
 
@@ -149,7 +149,7 @@ def test_direct_retry_completes_only_the_matching_prepared_save(exports, slack, 
         session_id=session.session_id, request_id="original-request", contract_revision=1,
         target_kind="compose", source_hash=original.content_hash, answer_hash=original.content_hash,
     )
-    session.pending_action = PendingAction(
+    session.pending_request = PendingRequest(
         contract=_contract(save="requested", slack=slack),
         response=pending_response, body_prepared=True, phase="awaiting_delivery", save_operation=operation,
     )
@@ -157,11 +157,11 @@ def test_direct_retry_completes_only_the_matching_prepared_save(exports, slack, 
     assert result["status"] == "completed"
     assert result["response"]["actions"][-1]["operation"] == operation.model_dump(mode="json")
     if slack == "not_requested":
-        assert session.pending_action is None
+        assert session.pending_request is None
     else:
-        assert session.pending_action.completed_actions == ("save_text",)
-        assert session.pending_action.save_receipt.verification == "verified"
-        assert session.pending_action.contract.actions.slack_notify.intent == slack
+        assert session.pending_request.completed_actions == ("save_text",)
+        assert session.pending_request.save_receipt.verification == "verified"
+        assert session.pending_request.contract.actions.slack_notify.intent == slack
     repeated = client.post(f"/sessions/export-session/answers/{answer_id}/save").json()
     assert repeated["status"] == "completed"
     assert repeated["response"]["actions"][-1]["operation"] == operation.model_dump(mode="json")
@@ -224,14 +224,14 @@ def test_distinct_export_content_keeps_separate_operations(exports, change):
 
 def test_exporting_partial_answer_does_not_finish_its_incomplete_original_request(exports):
     client, _, session, answer_id, original, _ = exports
-    pending = PendingAction(
+    pending = PendingRequest(
         contract=_contract(save="requested"),
         response=original, body_prepared=False, phase="awaiting_body",
     )
-    session.pending_action = pending
+    session.pending_request = pending
     result = client.post(f"/sessions/export-session/answers/{answer_id}/save").json()
     assert result["status"] == "completed"
-    assert session.pending_action == pending
+    assert session.pending_request == pending
 
 
 def test_natural_language_failure_direct_retry_and_natural_repeat_share_one_file(tmp_path, monkeypatch):
@@ -256,7 +256,7 @@ def test_natural_language_failure_direct_retry_and_natural_repeat_share_one_file
     assert failed["problem"]["code"] == "save_failed"
     assert failed["response"]["actions"][0]["status"] == "error"
     assert failed["answer_id"]
-    assert manager.session.pending_action is not None
+    assert manager.session.pending_request is not None
     store = InMemorySessionStore(settings=manager.settings, agent_factory=lambda: manager)
     store.get_or_create("flow-session")
     app = create_app()
@@ -265,7 +265,7 @@ def test_natural_language_failure_direct_retry_and_natural_repeat_share_one_file
     with TestClient(app) as client:
         direct = client.post(f"/sessions/flow-session/answers/{failed['answer_id']}/save").json()
         assert direct["status"] == "completed"
-        assert manager.session.pending_action is None
+        assert manager.session.pending_request is None
         repeated = manager.run_agent_flow("방금 답변을 출처와 함께 txt 파일로 저장해줘")
         assert repeated["status"] == "completed"
         receipts = [item["response"]["actions"][0] for item in (failed, direct, repeated)]

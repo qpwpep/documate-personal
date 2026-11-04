@@ -10,7 +10,7 @@ from src.runtime.nodes.actions import make_action_postprocess_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
 from tests.core.helpers import make_decisions_client, mock_chat_model
-from tests.core.test_pending_action_delivery import delivery_tools
+from tests.core.test_pending_request_delivery import delivery_tools
 from tests.synthesis_fixtures import prepare_synthesis_state
 
 

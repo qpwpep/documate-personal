@@ -19,7 +19,7 @@ from src.runtime.nodes.session import add_user_message, make_summarize_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
 from tests.core.helpers import make_decisions_client, mock_chat_model, structured_model
-from tests.core.test_pending_action_delivery import delivery_tools
+from tests.core.test_pending_request_delivery import delivery_tools
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
 
@@ -154,7 +154,7 @@ def test_failed_save_retries_the_same_frozen_operation_through_real_planner(tmp_
             user_input="설명을 한 문장으로 작성하고 파일로 저장해줘", session_id="save-retry-session",
         ))
     failed_receipt = first["response"].result.actions[0]
-    pending = first["runtime"].pending_action
+    pending = first["runtime"].pending_request
     assert failed_receipt.status == "error"
     assert failed_receipt.error_code == "write_failed"
     assert pending is not None and pending.body_prepared
@@ -168,7 +168,7 @@ def test_failed_save_retries_the_same_frozen_operation_through_real_planner(tmp_
     second = graph.invoke(build_graph_state_input(
         user_input="그 본문 그대로 저장을 다시 시도해줘", session_id="save-retry-session",
         messages=list(first["messages"]), user_turns=first["runtime"].user_turns,
-        previous_response=first["response"].result, pending_action=pending,
+        previous_response=first["response"].result, pending_request=pending,
     ))
     completed_receipt = second["response"].result.actions[0]
     assert second["runtime"].request_contract.revision == pending.contract.revision + 1
@@ -182,7 +182,7 @@ def test_failed_save_retries_the_same_frozen_operation_through_real_planner(tmp_
     assert completed_receipt.operation == failed_receipt.operation
     assert completed_receipt.operation.target_kind == "compose"
     assert second["response"].save_operation_binding_sha256 == failed_receipt.operation.binding_sha256
-    assert second["runtime"].pending_action is None
+    assert second["runtime"].pending_request is None
     assert len(list(tmp_path.glob("*.txt"))) == 1
     assert len(list(tmp_path.glob("*.json"))) == 1
 
@@ -224,7 +224,7 @@ class _SaveConversation:
             **self.payload,
         }
         if self.result is not None:
-            payload["target_request_id"] = self.result["runtime"].pending_action.contract.request_id
+            payload["target_request_id"] = self.result["runtime"].pending_request.contract.request_id
         if callable(payload.get("body")):
             payload["body"] = payload["body"](user["turn_id"])
         return InitialPlannerOutput(use_retrieval=False, tasks=[],
@@ -238,7 +238,7 @@ class _SaveConversation:
             messages=list(previous["messages"]) if previous else [],
             user_turns=previous["runtime"].user_turns if previous else (),
             previous_response=previous["response"].result if previous else None,
-            pending_action=previous["runtime"].pending_action if previous else None,
+            pending_request=previous["runtime"].pending_request if previous else None,
             session_metadata=session_metadata,
         ))
         return self.result
@@ -280,7 +280,7 @@ def test_destination_correction_does_not_repeat_completed_save(tmp_path, monkeyp
     assert path.stat().st_mtime_ns == original_mtime
     assert manifest_path.read_bytes() == original_manifest
     assert len(list(tmp_path.glob("*.txt"))) == 1
-    assert result["runtime"].pending_action is None
+    assert result["runtime"].pending_request is None
     assert [item["payload"]["channel"] for item in messages] == ["C123"]
 
 
@@ -306,7 +306,7 @@ def test_content_supplement_preserves_completed_save_while_preparing_new_body(tm
     )
     receipt = first["response"].result.actions[0]
     assert receipt.kind == "save_text" and receipt.status == "success"
-    pending = first["runtime"].pending_action
+    pending = first["runtime"].pending_request
     assert pending is not None and pending.completed_actions == ("save_text",)
     path = Path(receipt.file_path)
     manifest_path = path.with_name(path.name + ".json")
@@ -339,7 +339,7 @@ def test_content_supplement_preserves_completed_save_while_preparing_new_body(tm
     assert manifest_path.read_bytes() == original_manifest
     assert len(list(tmp_path.glob("*.txt"))) == 1
     assert len(list(tmp_path.glob("*.json"))) == 1
-    pending = result["runtime"].pending_action
+    pending = result["runtime"].pending_request
     assert pending is not None and pending.body_prepared
     assert pending.contract.actions.slack_notify.intent == "requested"
 
@@ -360,7 +360,7 @@ def test_content_reconfirmation_keeps_failed_save_operation_frozen(tmp_path, mon
         )
     failed_receipt = first["response"].result.actions[0]
     assert failed_receipt.status == "error" and failed_receipt.error_code == "write_failed"
-    pending = first["runtime"].pending_action
+    pending = first["runtime"].pending_request
     assert pending is not None and pending.body_prepared
     assert pending.save_operation == failed_receipt.operation
     assert len(list(tmp_path.glob("*.json"))) == 1
@@ -382,7 +382,7 @@ def test_content_reconfirmation_keeps_failed_save_operation_frozen(tmp_path, mon
     assert receipt.operation == failed_receipt.operation
     assert receipt.operation.target_kind == "compose"
     assert result["response"].save_operation_binding_sha256 == failed_receipt.operation.binding_sha256
-    assert result["runtime"].pending_action is None
+    assert result["runtime"].pending_request is None
     assert Path(receipt.file_path).read_bytes() == "시간복잡도는 O(n)이다.".encode("utf-8-sig")
     assert len(list(tmp_path.glob("*.txt"))) == 1
     assert len(list(tmp_path.glob("*.json"))) == 1
