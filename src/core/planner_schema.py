@@ -75,7 +75,7 @@ class PlannedRequirement(RetrievalRequirement):
         description="Literal parameter names, option/flag names, requested value tokens or code fragments that must appear in returned source, such as axis, --force, reflect or random_state. For both docs and upload, aspects add source-content restrictions beyond identifying the API in symbols. Questions about a call's ownership or surrounding assignments and match/case binding belong in query and the body; they do not require those terms inside the selected call. Naming an API, requiring its actual library identity, or asking to quote its source unchanged does not require that API spelling in source. A verified import alias still qualifies. Repeat a symbol here only when the user independently requires its exact spelling and would exclude aliases; retain both fields in that case. For docs setting-meaning questions, omit ordinary data and arbitrary counts, capacities, sizes, thresholds or seeds; keep their parameter names here and complete settings in query and the body request. A value changing the result is not sufficient to make it a literal anchor. Keep categorical modes, enum members, sentinels and distinct behavior-branch values separately alongside their parameter names, including numeric or Boolean choices. Preserve an explicitly requested exact source/code match. Source locations (lines/ranges, cells, pages or document regions) belong in query and the body request, not aspects, unless explicitly requested as literal strings occurring in source. Classify by the requested role, even when location labels are quoted. For upload and docs, never put natural-language properties or conditions here; preserve their meaning in query. For docs additionally request the relevant evidence_needs. Only anchors explicitly requested in the user's dialogue belong here; never guess an identifier from the user's description of a property.",
     )
     symbols: list[str] = Field(default_factory=list, max_length=1,
-                              description="At most one primary target. Use a fully qualified API name when selecting calls to that API. To investigate whether an uploaded call belongs to that API, use the observed call's written name instead; do not assume the answer by canonicalizing its owner. Preserve ownership and surrounding binding questions in query and the body, not as additional literal aspects. Use separate tasks for independent symbols, including each uploaded variable/constant whose value is requested. Never put a second independent variable in the first variable's aspects: symbol retrieval selects only the primary target's occurrences. Calls inspected inside a function belong in its aspects, not additional definitions.")
+                              description="At most one primary target. Use a fully qualified API name when selecting calls to that API. To investigate whether an uploaded call belongs to that API, use the observed call's written name instead; do not assume the answer by canonicalizing its owner. Preserve ownership and surrounding binding questions in query and the body, not as additional literal aspects. Use separate tasks for independent symbols, including each uploaded variable/constant whose value is requested. Never put a second independent variable in the first variable's aspects: symbol retrieval selects only the primary target's occurrences. A query mentioning related samples, constraints, writes or other objects does not widen those occurrences. Plan a separate target when its name is known, or an explicit topic task without symbols when the related source must be discovered. Calls inspected inside a function belong in its aspects, not additional definitions.")
 
     @model_validator(mode="after")
     def validate_named_target(self) -> "PlannedRequirement":
@@ -200,9 +200,65 @@ class AspectReference(BaseModel):
     answer_quote: str = Field(min_length=1, description="Exact, minimal selected item from previous_answer_for_aspects containing this aspect. Never quote the whole answer or unselected items.")
 
 
+class AspectRole(BaseModel):
+    """Distinguish a required source spelling from a value the answer must explain."""
+
+    model_config = ConfigDict(extra="forbid")
+    aspect: str = Field(min_length=1)
+    role: Literal["source_literal", "semantic_value"] = Field(
+        description="source_literal requires this anchor in the selected source. semantic_value describes an interpreted result, relationship or value; preserve it in query/body instead of aspects. A value occurring in the user request alone does not make its spelling mandatory in source.",
+    )
+
+
+class RetrievalTaskInterpretation(BaseModel):
+    """Initial interpretation used to check, not broaden, one planned source scope."""
+
+    model_config = ConfigDict(extra="forbid")
+    requirement_id: str = Field(min_length=1)
+    scope: Literal["target", "related_context"] = Field(
+        description="target asks for the selected target's own declaration/use. related_context asks for independently stored evidence beyond that target's occurrences, with an as-yet unknown code identifier. For uploads use an explicit topic task with empty symbols for related_context; named independent targets have their own target tasks. Classify the actual scope of this task.query, not the scope the chosen match mode happens to return.",
+    )
+    aspect_roles: list[AspectRole] = Field(
+        description="Exactly one role for every requirement.aspect and no other anchors. Only source_literal may remain in aspects; semantic values belong in query/body and must be removed from literal filters before returning the plan.",
+    )
+
+
 class InitialPlannerOutput(RetrievalPlanOutput):
     """Initial model output must include the request facts before any plan can execute."""
 
     request_contract: WireRequestContract = Field(description="Interpret the current user request once, with locally defined evidence and offered body references. Do not invent server identities, hashes or readiness.")
 
     aspect_references: list[AspectReference] = Field(default_factory=list, description="Required for EACH aspect absent from user_turn_ledger but selected from previous_answer_for_aspects by the current user. Never leave empty for a selected numbered/referred parameter. Cite current user evidence with interpretation=reference and scope covering retrieval.<requirement_id>.aspects (that path, a parent, or current_request), plus the exact selected answer item. Empty only for direct user anchors or no selected indirect aspects.")
+
+    task_interpretations: list[RetrievalTaskInterpretation] = Field(
+        default_factory=list,
+        description="Exactly one interpretation for each task requirement_id; [] when there are no tasks. Inventory all source facts the requested body needs before choosing tasks. Related evidence does not become part of a symbol selection merely by mentioning it in query. These records validate the initial plan and do not add searches or weaken literal constraints.",
+    )
+
+    @model_validator(mode="after")
+    def validate_task_interpretations(self) -> "InitialPlannerOutput":
+        identities = [item.requirement_id for item in self.task_interpretations]
+        if len(set(identities)) != len(identities) or set(identities) != {task.requirement_id for task in self.tasks}:
+            raise ValueError("task_interpretations must contain exactly one record for each task requirement_id, with no missing, duplicate or unknown IDs.")
+        interpretations = {item.requirement_id: item for item in self.task_interpretations}
+        for task in self.tasks:
+            interpretation = interpretations[task.requirement_id]
+            aspects = [item.aspect for item in interpretation.aspect_roles]
+            if len(set(aspects)) != len(aspects) or set(aspects) != set(task.requirement.aspects):
+                raise ValueError(f"task_interpretations[{task.requirement_id}].aspect_roles must describe each requirement aspect exactly once, without missing or extra anchors.")
+            if any(item.role == "semantic_value" for item in interpretation.aspect_roles):
+                raise ValueError(
+                    f"Requirement {task.requirement_id} puts a semantic value in literal aspects. "
+                    "Preserve the requested meaning in query and body, and remove that value from aspects. "
+                    "Use source_literal only when its occurrence in source, rather than its interpreted result, is required."
+                )
+            if (task.route == "upload" and interpretation.scope == "related_context"
+                    and (task.requirement.match != "topic" or task.requirement.symbols)):
+                raise ValueError(
+                    f"Requirement {task.requirement_id} asks for related context but selects only a code target's occurrences. "
+                    "Express the related source question as an explicit topic task without symbols. Keep or add "
+                    "separate target tasks only for independently requested facts about known symbols; mentioning "
+                    "an identifier as context does not request its independent value or assignment. Preserve "
+                    "the requested file scope and body meaning; do not relabel a related question as target-only."
+                )
+        return self

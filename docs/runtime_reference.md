@@ -270,6 +270,8 @@ planner의 `PlannedDocsLibrary`는 지원 출처의 canonical ID와 `unsupported
 
 각 task는 독립적인 근거 요구입니다. 같은 `docs` route라도 라이브러리·대상·버전이 다르면 여러 task로 유지하며 검색어를 하나로 합치지 않습니다. task 개수에는 고정 상한을 두지 않으며, task별 검색 결과 수 `k`는 1~10으로 제한합니다. 계약 기준은 `src/core/planner_schema.py`입니다.
 
+초기 모델 출력의 `task_interpretations`는 각 `requirement_id`에 정확히 하나씩 대응합니다. `scope=target`은 대상 자체의 선언·사용이고, `scope=related_context`는 그 밖에 별도로 저장된 근거입니다. 업로드의 관련 근거는 이름이 알려진 별도 target task 또는 `match=topic`, `symbols=[]`인 별도 관련 질문으로 표현해야 합니다. `aspect_roles`는 각 aspect를 정확히 한 번 분류하며 `source_literal`만 허용합니다. `semantic_value`로 분류한 계산 결과·경로 등은 query와 본문에 보존하고 aspect에서 제거해야 합니다. 누락·중복·알 수 없는 ID와 역할 불일치는 초기 출력 보정 대상이며, 서버가 검색 범위를 자동으로 넓히거나 literal 검사를 완화하지 않습니다. 이 레코드는 초기 검증 뒤 실행 계획에서 제외합니다. 각 query에는 해당 route가 입증할 내용과 그 대상에 대한 사용자의 허용된 부재·확인 불가 조건을 보존합니다.
+
 `symbols`는 검색 대상을, `aspects`는 원문에 있어야 하는 별도 철자·값을 지정합니다. 알려진 API 호출을 찾는 요청은 정규 API 심볼을 사용하고 검증된 import 별칭도 인정합니다. 관측한 `np.array`의 소속을 묻는 정체 확인은 원문 심볼을 유지하며, NumPy 여부는 `query`·본문 지시에서 판단할 질문으로 남깁니다. 주변 재대입·`match`·`case`는 바인딩 해석 문맥이며 호출 자체의 literal aspect가 아닙니다. 원문 인용 요청만으로 정규 API 철자를 aspect에 복제하지 않습니다. API의 정체성과 정확한 원문 철자를 각각 명시한 요청에는 두 필드를 모두 유지합니다.
 
 | 필드 | 의미 |

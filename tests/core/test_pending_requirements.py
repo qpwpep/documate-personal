@@ -23,7 +23,8 @@ class PlannerBoundary:
         context = next(message for message in messages if message.name == "request_context")
         facts = json.loads(context.content.split("\n", 1)[1])
         contract = self.contract(facts) if callable(self.contract) else self.contract
-        return {"use_retrieval": False, "tasks": [], "request_contract": contract, "aspect_references": []}
+        return {"use_retrieval": False, "tasks": [], "request_contract": contract,
+                "aspect_references": [], "task_interpretations": []}
 
 
 def _facts(query, *, content=(), format=(), pending=None, relation="new", turn_id="current"):

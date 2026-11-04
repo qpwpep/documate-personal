@@ -17,9 +17,10 @@ from .helpers import _CapturePlannerLLM, build_test_state, mock_chat_model
 class PlannerNodeTest(unittest.TestCase):
     def test_missing_upload_requests_a_file_without_starting_retrieval(self) -> None:
         query = "Find groupby in my notebook."
-        requested = InitialPlannerOutput(use_retrieval=True, tasks=[
-            RetrievalTask(route="upload", query="groupby usage", k=4),
-        ], request_contract=WireRequestContract(slack_recipient={"state": "omitted"}))
+        task = RetrievalTask(route="upload", query="groupby usage", k=4)
+        requested = InitialPlannerOutput(use_retrieval=True, tasks=[task],
+            task_interpretations=[{"requirement_id": task.requirement_id, "scope": "target", "aspect_roles": []}],
+            request_contract=WireRequestContract(slack_recipient={"state": "omitted"}))
         state = build_test_state({
             "user_input": query, "messages": [HumanMessage(content=query)], "retriever": None,
         })

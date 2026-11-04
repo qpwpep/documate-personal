@@ -151,7 +151,7 @@ def run(port: int) -> None:
                                   "interpretation": "instruction"}],
                 })
             files = context["upload_files"]
-            tasks = [{"route": "upload", "query": "alpha beta value", "k": 4,
+            tasks = [{"route": "upload", "requirement_id": "attached-files", "query": "alpha beta value", "k": 4,
                       "requirement": {"file_ids": [item["file_id"] for item in files]}}] if files else []
             if "근거 부족 구분 검증" in query:
                 tasks = [{"route": "upload", "requirement_id": symbol, "query": symbol, "k": 4,
@@ -161,6 +161,8 @@ def run(port: int) -> None:
             content = InitialPlannerOutput.model_validate({
                 "use_retrieval": bool(tasks),
                 "tasks": tasks,
+                "task_interpretations": [{"requirement_id": task["requirement_id"], "scope": "target",
+                                          "aspect_roles": []} for task in tasks],
                 "request_contract": contract.model_dump(mode="json"),
             }).model_dump_json()
         elif schema == "AnswerDocument":

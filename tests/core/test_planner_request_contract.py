@@ -101,7 +101,7 @@ def test_authority_repair_identifies_the_unsupported_requirement_and_its_evidenc
     # This candidate was rejected during a live exact-input save. The model
     # added a layout prohibition but cited evidence scoped only to the body.
     model = PlannerResult({
-        "use_retrieval": False, "tasks": [], "aspect_references": [],
+        "use_retrieval": False, "tasks": [], "aspect_references": [], "task_interpretations": [],
         "request_contract": {
             "relation": "new", "target_request_id": None,
             "actions": {
@@ -156,7 +156,8 @@ def test_initial_plan_preserves_bound_contract_with_or_without_available_retriev
                                    scope="answer.sentence_counts", interpretation="instruction")),
     )
     task = RetrievalTask(route=route, query="numpy.reshape usage", k=2)
-    model = PlannerResult(InitialPlannerOutput(use_retrieval=True, tasks=[task], request_contract=proposal))
+    model = PlannerResult(InitialPlannerOutput(use_retrieval=True, tasks=[task], request_contract=proposal,
+        task_interpretations=[{"requirement_id": task.requirement_id, "scope": "target", "aspect_roles": []}]))
 
     result = make_planner_node(structured_model(model.invoke, InitialPlannerOutput), False)(state_for(query))
 
@@ -190,7 +191,8 @@ def test_retrieval_rewrite_keeps_the_original_bound_contract():
         evidence=(ContractEvidence(id="count", turn_id="current", quote="한 문장으로",
                                    scope="answer.sentence_counts", interpretation="instruction"),),
     )
-    initial = InitialPlannerOutput(use_retrieval=True, tasks=[task], request_contract=proposal)
+    initial = InitialPlannerOutput(use_retrieval=True, tasks=[task], request_contract=proposal,
+        task_interpretations=[{"requirement_id": task.requirement_id, "scope": "target", "aspect_roles": []}])
     state = state_for(query)
     state.update(make_planner_node(structured_model(lambda _messages: initial, InitialPlannerOutput), False)(state))
     original_contract = state["runtime"].request_contract

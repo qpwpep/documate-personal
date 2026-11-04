@@ -27,12 +27,17 @@ def _state():
 
 
 def _proposal(*, aspects=None, answer_quote="1. order 옵션"):
+    requested_aspects = aspects if aspects is not None else ["order"]
     return InitialPlannerOutput.model_validate({
         "use_retrieval": True,
         "tasks": [{
             "requirement_id": "reshape", "route": "docs", "query": "numpy.reshape order", "k": 3,
             "requirement": {"library": "numpy", "symbols": ["numpy.reshape"],
-                            "aspects": aspects if aspects is not None else ["order"], "evidence_needs": ["parameters"]},
+                            "aspects": requested_aspects, "evidence_needs": ["parameters"]},
+        }],
+        "task_interpretations": [{
+            "requirement_id": "reshape", "scope": "target",
+            "aspect_roles": [{"aspect": aspect, "role": "source_literal"} for aspect in requested_aspects],
         }],
         "request_contract": WireRequestContract(slack_recipient={"state": "omitted"}, evidence=[{
             "id": "selection", "turn_id": "current", "quote": CURRENT,

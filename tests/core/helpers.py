@@ -163,6 +163,11 @@ class _CapturePlannerLLM(StructuredModel):
             planner_output = InitialPlannerOutput(
                 use_retrieval=planner_output.use_retrieval,
                 tasks=planner_output.tasks,
+                task_interpretations=[{
+                    "requirement_id": task.requirement_id, "scope": "target",
+                    "aspect_roles": [{"aspect": aspect, "role": "source_literal"}
+                                     for aspect in task.requirement.aspects],
+                } for task in planner_output.tasks],
                 request_contract=WireRequestContract(slack_recipient={"state": "omitted"}),
             )
         self.planner_output = (planner_output.model_dump(mode="json")

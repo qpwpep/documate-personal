@@ -54,8 +54,10 @@ class LocalModelProvider:
                         else [item["file_id"] for item in files])
             parsed = {
                 "use_retrieval": bool(files),
-                "tasks": [{"route": "upload", "query": self.controls.search_query, "k": 4,
+                "tasks": [{"route": "upload", "requirement_id": "attached-files", "query": self.controls.search_query, "k": 4,
                            "requirement": {"file_ids": file_ids}}] if files else [],
+                "task_interpretations": [{"requirement_id": "attached-files", "scope": "target",
+                                          "aspect_roles": []}] if files else [],
                 "request_contract": WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"),
             }
             parsed = InitialPlannerOutput.model_validate(parsed).model_dump(mode="json")

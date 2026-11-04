@@ -19,8 +19,12 @@ class _RepairingPlanner:
 def _upload_plan(requirement, *, query):
     from src.core.request_contracts import WireRequestContract
 
+    planned_requirement = RetrievalRequirement.model_validate(requirement)
     return {"use_retrieval": True, "tasks": [{"route": "upload", "requirement_id": "source",
-            "requirement": RetrievalRequirement.model_validate(requirement).model_dump(mode="json"), "query": query, "k": 4}],
+            "requirement": planned_requirement.model_dump(mode="json"), "query": query, "k": 4}],
+            "task_interpretations": [{"requirement_id": "source", "scope": "target",
+                "aspect_roles": [{"aspect": aspect, "role": "source_literal"}
+                                 for aspect in planned_requirement.aspects]}],
             "request_contract": WireRequestContract(slack_recipient={"state": "omitted"}).model_dump(mode="json"),
             "aspect_references": []}
 
