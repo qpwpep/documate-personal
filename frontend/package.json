@@ -14,6 +14,7 @@
     "lint": "eslint .",
     "test:unit": "node --test scripts/node-support.test.mjs && vitest run",
     "test:e2e": "npm run build && playwright test --project chromium && playwright test --project production",
+    "test:live": "playwright test --config playwright.live.config.ts",
     "generate:api": "node scripts/generate-api.mjs && node scripts/generate-upload-casefold.mjs",
     "check:api": "node scripts/generate-api.mjs --check && node scripts/generate-upload-casefold.mjs --check"
   },
