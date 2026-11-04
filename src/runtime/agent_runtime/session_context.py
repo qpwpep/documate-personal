@@ -52,6 +52,8 @@ class SessionContext:
         self._upload_storage: UploadStorage | None = None
         self.upload_operations: OrderedDict[str, str] = OrderedDict()
         self._previous_response: AnswerResponse | None = None
+        self._answer_count = 0
+        self._previous_answer_ordinal: int | None = None
         self._pending_request: PendingRequest | None = None
         self._answers: OrderedDict[str, AnswerResponse] = OrderedDict()
         self._answer_export_operations: OrderedDict[str, SaveOperation] = OrderedDict()
@@ -59,6 +61,10 @@ class SessionContext:
     @property
     def previous_response(self) -> AnswerResponse | None:
         return self._previous_response.model_copy(deep=True) if self._previous_response is not None else None
+
+    @property
+    def previous_answer_ordinal(self) -> int | None:
+        return self._previous_answer_ordinal
 
     @property
     def pending_request(self) -> PendingRequest | None:
@@ -70,6 +76,13 @@ class SessionContext:
 
     def commit_previous_response(self, response: AnswerResponse | None) -> None:
         self._previous_response = response.model_copy(deep=True) if response is not None else None
+        if response is not None:
+            # Equal bodies can be displayed on different turns; export IDs
+            # deduplicate bodies and cannot establish answer positions.
+            self._answer_count += 1
+            self._previous_answer_ordinal = self._answer_count
+        else:
+            self._previous_answer_ordinal = None
 
     def commit_pending_request(self, pending_request: PendingRequest | None) -> None:
         self._pending_request = pending_request.model_copy(deep=True) if pending_request is not None else None
@@ -197,6 +210,8 @@ class SessionContext:
     def reset_conversation_memory(self) -> None:
         self._conversation_memory = ConversationMemorySnapshot()
         self._previous_response = None
+        self._answer_count = 0
+        self._previous_answer_ordinal = None
         self._pending_request = None
         self._answers.clear()
         self._answer_export_operations.clear()

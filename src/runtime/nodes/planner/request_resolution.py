@@ -7,7 +7,7 @@ from uuid import uuid4
 from src.core.answer_schema import text_document
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.runtime import get_runtime_state
-from src.core.request_bodies import body_to_wire
+from src.core.request_bodies import OrdinalAnswerReference, body_to_wire
 from src.core.request_contracts import (
     AcknowledgeBody, ActionContract, ActionRequest, AnswerContract, AnswerReference, BoundAnswerReference,
     BoundInputText, ComposeBody, CopyAnswerBody, CopyInputBody, MissingInformation,
@@ -110,11 +110,17 @@ def _bind_body(body, runtime, utterances, original=None, *, declared_missing=())
             return CopyInputBody(source=selected), ()
         return TransformInputBody(source=selected, instruction=body.instruction, evidence_ids=body.evidence_ids), ()
     if isinstance(body, (WireCopyAnswerBody, WireTransformAnswerBody)):
-        response = runtime.previous_response if body.source.ref == "previous" else (runtime.pending_request.response if runtime.pending_request else None)
+        ref = body.source.ref
+        if isinstance(body.source, OrdinalAnswerReference):
+            if body.source.ordinal != runtime.previous_answer_ordinal:
+                missing = _missing("answer_reference", "unknown_id", "지정한 순서의 답변을 현재 원본에서 찾지 못했습니다. 사용할 답변의 본문을 지정해 주세요.")
+                return UnresolvedBody(question=missing.question, instruction=getattr(body, "instruction", "")), (missing,)
+            ref = "previous"
+        response = runtime.previous_response if ref == "previous" else (runtime.pending_request.response if runtime.pending_request else None)
         if response is None or not response.content.blocks:
             missing = _missing("answer_reference", "unknown_id", "참조한 답변이 준비되어 있지 않습니다. 사용할 본문을 지정해 주세요.")
             return UnresolvedBody(question=missing.question, instruction=getattr(body, "instruction", "")), (missing,)
-        source = BoundAnswerReference(ref=body.source.ref, response_hash=response.content_hash)
+        source = BoundAnswerReference(ref=ref, response_hash=response.content_hash)
         if isinstance(body, WireCopyAnswerBody):
             return CopyAnswerBody(source=source), ()
         return TransformAnswerBody(source=source, instruction=body.instruction, evidence_ids=body.evidence_ids), ()

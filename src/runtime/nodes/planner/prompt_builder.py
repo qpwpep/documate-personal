@@ -77,7 +77,7 @@ PLANNER_SYS = PLANNER_RETRIEVAL_SYS + (
     "- Keep body.instruction limited to the requested body operation and its preservation constraints. File saving and message delivery belong only in actions. For editing followed by saving, describe only the edit in body.instruction and record save_text=requested separately. Preserve words about saving or sending when they are quoted payload or the subject being explained.\n"
     "- Preserving wording while requesting a new displayed code block, list or table is a layout-only transform_input/transform_answer, not an exact-copy conflict. Select the original payload without adding delimiters to its quote; keep no-translation/no-explanation/no-example constraints. Record an instruction to preserve the source content and change only the requested layout. A line count alone never authorizes deleting or rewriting literal source content.\n"
     "- A pure prohibition such as 'Do not send this to Slack' is acknowledge with slack_notify=forbidden. It does not need a subject or delivery destination. Keep ambiguous intent questions unresolved. A prohibition of delivery alone must not discard an unfinished explanation or transformation in a pending request.\n"
-    "- Input bodies select source={turn_id, quote, occurrence} from the exact User Turn Ledger. quote must match verbatim; occurrence is one-based only when the user distinguishes repeated text, otherwise null. Answer bodies select source={ref: previous or pending} from Offered Answer References. Do not output hashes, offsets, request IDs of your own, revisions or readiness. The server binds those fields.\n"
+    "- Input bodies select source={turn_id, quote, occurrence} from the exact User Turn Ledger. quote must match verbatim; occurrence is one-based only when the user distinguishes repeated text, otherwise null. Answer bodies select source={ref: previous or pending} only when the user refers to that offered answer. An explicitly numbered answer uses source={ref: ordinal, ordinal: the requested one-based position}; preserve the requested position even if it is not offered. Never replace an unavailable, older or nonexistent numbered answer with previous. The server verifies the position and asks for the unavailable source. Do not output hashes, offsets, request IDs of your own, revisions or readiness. The server binds those fields.\n"
     "- 'Translate the phrase save this' is transform_input selecting only the phrase, with no save action. Surrounding quotation marks are delimiters, not payload, unless explicitly included in the requested content. '현재 답변을 저장해줘' is copy_answer(ref=previous). '방금 답변을 세 줄로 줄여 저장해줘' is transform_answer(ref=previous) plus required line_count=3.\n"
     "- A request for the answer as a TXT file, including '방금 답변 txt로', requests save_text and preserves the selected answer. An explicit request to reformat displayed text without creating a file does not request saving.\n"
     "- The save_text export always preserves the selected body's existing citations, source locations and limitations. When the user explicitly requests exporting an existing answer with no additional body changes or verification requirements, '방금 답변을 출처와 함께 txt 파일로 저장해줘' or export instructions to 'include the sources' or 'keep the limitations' use copy_answer with save_text=requested, empty answer requirements and no retrieval. Asking about sources or limitations alone does not request saving. Existing source attribution is an export component, not new answer content. Do not choose transform_answer merely to add a sources section or convert Markdown into TXT. Use transform_answer when the user requests actual changes such as a new displayed layout, translating, shortening, rewriting or adding new claims; newly requested external verification still needs its own retrieval.\n"
@@ -194,7 +194,7 @@ def build_planner_messages(state: GraphState, max_turns: int = 6) -> list[BaseMe
         "Interpret the latest user request once, using the exact user_turn_ledger for evidence and offered references for body selection."
     )))
     if runtime.previous_response is not None:
-        context["offered_answer_references"].append(_offered_answer("previous", runtime.previous_response))
+        context["offered_answer_references"].append(_offered_answer("previous", runtime.previous_response, ordinal=runtime.previous_answer_ordinal))
     if runtime.pending_request is not None:
         pending = runtime.pending_request
         context["pending_request"] = {
@@ -230,8 +230,8 @@ def build_planner_messages(state: GraphState, max_turns: int = 6) -> list[BaseMe
     return model_messages
 
 
-def _offered_answer(ref, response) -> dict:
-    return {"ref": ref, "document": response.content.model_dump(mode="json"), "export": {
+def _offered_answer(ref, response, *, ordinal: int | None = None) -> dict:
+    return {"ref": ref, "ordinal": ordinal, "document": response.content.model_dump(mode="json"), "export": {
         "preserves": ["body", "sources", "limitations"],
         "source_count": len(response.citations), "limitation_count": len(response.issues),
     }}

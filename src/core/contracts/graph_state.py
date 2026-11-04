@@ -43,6 +43,7 @@ class RuntimeState(BaseModel):
     memory_summary: str | None = None
     progress_emitter: Any | None = None
     previous_response: AnswerResponse | None = None
+    previous_answer_ordinal: int | None = Field(default=None, ge=1)
     request_contract: RequestContract | None = None
     pending_request: PendingRequest | None = None
     answer_export_operations: dict[str, SaveOperation] = Field(default_factory=dict)

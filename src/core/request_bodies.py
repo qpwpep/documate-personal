@@ -49,6 +49,11 @@ class AnswerReference(BodyModel):
     ref: Literal["previous", "pending"]
 
 
+class OrdinalAnswerReference(BodyModel):
+    ref: Literal["ordinal"]
+    ordinal: int = Field(ge=1, description="The one-based answer position explicitly requested by the user. Preserve it even when no offered answer has this position; never substitute previous.")
+
+
 class BoundAnswerReference(BodyModel):
     ref: Literal["previous", "pending"]
     response_hash: str = Field(min_length=1)
@@ -103,7 +108,7 @@ class WireCopyAnswerBody(BodyModel):
     requested displayed layout uses transform_answer even if wording stays literal.
     """
     kind: Literal["copy_answer"] = "copy_answer"
-    source: AnswerReference
+    source: AnswerReference | OrdinalAnswerReference
 
 
 class CopyAnswerBody(BodyModel):
@@ -117,7 +122,7 @@ class WireTransformAnswerBody(BodyModel):
     Saving the existing answer with its sources/limitations is copy_answer.
     """
     kind: Literal["transform_answer"] = "transform_answer"
-    source: AnswerReference
+    source: AnswerReference | OrdinalAnswerReference
     instruction: str = Field(min_length=1, description=(
         "The requested change to the answer's actual wording, language, structure or claims. "
         "TXT serialization or including existing sources/limitations is not a body change; use copy_answer. "

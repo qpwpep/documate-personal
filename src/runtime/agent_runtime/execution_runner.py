@@ -52,6 +52,7 @@ class ExecutionRunner:
             memory_summary=conversation.memory_summary,
             session_metadata=self.session.snapshot_session_metadata(),
             previous_response=self.session.previous_response,
+            previous_answer_ordinal=self.session.previous_answer_ordinal,
             pending_request=self.session.pending_request,
             answer_export_operations=dict(self.session.answer_export_operations),
         )
