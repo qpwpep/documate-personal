@@ -81,6 +81,8 @@ class SearchHit(BaseModel):
     score: RetrievalScore
     rank: int = Field(ge=1)
     requirement_id: str = ""
+    role: Literal["candidate", "context"] = "candidate"
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
 
 
 def _evidence_id(snapshot: DocumentSnapshot, element: DocumentElement, selection: SourceSelection) -> str:
@@ -209,11 +211,16 @@ def source_line_records(evidence: EvidenceRef) -> list[dict]:
 
 
 def dedupe_search_hits(hits: Iterable[SearchHit]) -> list[SearchHit]:
-    result: list[SearchHit] = []
-    seen: set[tuple[str, str]] = set()
+    result: dict[tuple[str, str], SearchHit] = {}
     for hit in hits:
         key = (hit.requirement_id, hit.evidence.id)
-        if key not in seen:
-            result.append(hit)
-            seen.add(key)
-    return result
+        previous = result.get(key)
+        if previous is None:
+            result[key] = hit
+            continue
+        # A source can be a requested candidate and another candidate's binding
+        # context. Deduplication must preserve both roles and every dependency.
+        preferred = hit if previous.role == "context" and hit.role == "candidate" else previous
+        dependencies = sorted(set(previous.supporting_evidence_ids) | set(hit.supporting_evidence_ids))
+        result[key] = preferred.model_copy(update={"supporting_evidence_ids": dependencies})
+    return list(result.values())

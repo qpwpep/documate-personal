@@ -11,7 +11,7 @@ from langchain_core.embeddings import Embeddings
 
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.graph import build_graph_state_input
-from src.core.contracts.retrieval import UploadRetriever
+from src.core.contracts.retrieval import RetrievalResult, UploadRetriever
 from src.core.documents import DocumentElement, ParsedDocument, build_snapshot
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.uploads import UploadRecord
@@ -79,6 +79,11 @@ def _source_retriever(source):
         elements=[DocumentElement(element_id="source", kind="code", text=source)],
     )
     return SimpleNamespace(source_documents=(document,))
+
+
+def _symbol_excerpts(payload: RetrievalResult) -> list[str]:
+    """Keep exact symbol selection assertions separate from its supporting source ranges."""
+    return [hit.evidence.excerpt for hit in payload.hits if hit.role == "candidate"]
 
 
 def _search_code_aspect(source, aspect, *, match="definition"):
@@ -199,7 +204,7 @@ def test_shadowed_function_parameter_does_not_change_outer_import_alias():
                                         retriever=_source_retriever(source))
 
     assert payload.diagnostics.answerability == "covered"
-    assert [hit.evidence.excerpt for hit in payload.hits] == ["    return np.array([2])"]
+    assert _symbol_excerpts(payload) == ["    return np.array([2])"]
 
 
 @pytest.mark.parametrize(("prefix", "symbol", "covered"), [
@@ -214,7 +219,7 @@ def test_explicit_global_uses_module_binding_instead_of_enclosing_binding(prefix
                                         retriever=_source_retriever(source))
 
     assert payload.diagnostics.answerability == ("covered" if covered else "missing")
-    assert [hit.evidence.excerpt for hit in payload.hits] == (["        return np.array([1])"] if covered else [])
+    assert _symbol_excerpts(payload) == (["        return np.array([1])"] if covered else [])
 
 
 def test_assignment_visits_the_value_before_rebinding_an_import_alias():
@@ -223,7 +228,294 @@ def test_assignment_visits_the_value_before_rebinding_an_import_alias():
                                         retriever=_source_retriever(source))
 
     assert payload.diagnostics.answerability == "covered"
-    assert [hit.evidence.excerpt for hit in payload.hits] == ["np = np.array([1])"]
+    assert _symbol_excerpts(payload) == ["np = np.array([1])"]
+
+
+def test_conditional_branches_resolve_imports_from_their_own_entry_binding():
+    source = ("import numpy as np\nif condition:\n    np = service\n"
+              "else:\n    result = np.array([1])\n")
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "covered"
+    assert _symbol_excerpts(payload) == ["    result = np.array([1])"]
+
+
+def test_import_and_branch_source_ranges_reach_the_prepared_evidence_packet():
+    branch = "if use_service:\n    np = service\nelse:\n    result = np.array([1, 2])"
+    source = "unrelated_prefix = 10\nimport numpy as np\n\n" + branch + "\nunrelated_suffix = 20\n"
+    task = RetrievalTask(route="upload", query="Find the actual numpy.array call and its original line", k=5,
+                         requirement={"symbols": ["numpy.array"], "match": "symbol"})
+    payload = build_upload_search_tool()(query=task.query, requirement=task.requirement,
+                                        retriever=_source_retriever(source))
+    retrieved = {hit.evidence.excerpt for hit in payload.hits}
+
+    assert "import numpy as np" in retrieved
+    assert branch in retrieved
+    assert all("unrelated_" not in excerpt for excerpt in retrieved)
+    planner = _CapturePlannerLLM(PlannerOutput(use_retrieval=True, tasks=[task]))
+    state = build_graph_state_input(user_input=task.query, retriever=_source_retriever(source))
+    state.update(add_user_message(state))
+    state.update(make_planner_node(planner, False)(state))
+    state.update(make_retrieve_dispatch_node(None, build_upload_search_tool(), False)(state))
+    prepare_synthesis_state(state, limits=synthesis_excerpt_limits(normal_chars=480))
+    prepared = prepare_synthesis_inputs(state=state, context=build_synthesis_context(state=state), max_turns=6)
+    packet = {evidence.excerpt for evidence in prepared.evidence_packet}
+
+    assert packet == {"import numpy as np\n\n" + branch}
+    assert all(evidence.excerpt == source[evidence.selection.start:evidence.selection.end]
+               for evidence in prepared.evidence_packet)
+
+
+def test_notebook_binding_context_keeps_its_original_cell(uploaded):
+    cells = ["import numpy as np\n", "if condition:\n    np = service\n", "result = np.array([1])\n"]
+    with uploaded(cells, notebook=True) as retriever:
+        payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                            retriever=retriever)
+
+    excerpts = {hit.evidence.excerpt: hit.evidence.element.anchors[0].cell_id for hit in payload.hits}
+    assert excerpts["import numpy as np"] == "source-0"
+    assert excerpts["if condition:\n    np = service"] == "source-1"
+    assert excerpts["result = np.array([1])"] == "source-2"
+    assert payload.diagnostics.answerability == "unknown"
+
+
+@pytest.mark.parametrize("capacity", ["enough", "total", "items", "excerpt"])
+def test_binding_dependencies_are_selected_together_within_the_packet_budget(capacity):
+    from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
+    from src.runtime.nodes.synthesis.evidence_selection import select_evidence_packet
+
+    imported = "import numpy as np"
+    branch = "if condition:\n    np = service\nelse:\n    result = np.array([1])"
+    source = imported + "\n" + branch + "\n"
+    task = RetrievalTask(requirement_id="binding", route="upload", query="Find the actual numpy.array call", k=5,
+                         requirement={"symbols": ["numpy.array"], "match": "symbol"})
+    payload = build_upload_search_tool()(query=task.query, requirement=task.requirement,
+                                        retriever=_source_retriever(source))
+    primary, = [hit for hit in payload.hits if hit.role == "candidate"]
+    contexts = [hit for hit in payload.hits if hit.role == "context"]
+    assert set(primary.supporting_evidence_ids) == {hit.evidence.id for hit in contexts}
+    assert {hit.evidence.excerpt for hit in contexts} == {imported, branch}
+    budget = RetrievedEvidenceBudget(
+        max_excerpt_chars=len(branch) - (capacity == "excerpt"),
+        max_total_excerpt_chars=len(imported + branch) - (capacity == "total"),
+        max_items=1 if capacity == "items" else 2,
+    )
+    packet, associations = select_evidence_packet(
+        [hit.evidence for hit in payload.hits], budget=budget, query=task.query,
+        requirements_by_evidence={hit.evidence.id: [task] for hit in payload.hits},
+        supporting_evidence_ids={(task.requirement_id, primary.evidence.id): primary.supporting_evidence_ids},
+    )
+
+    assert {item.excerpt for item in packet} == ({imported, branch} if capacity == "enough" else set())
+    assert associations == {item.id: [task.requirement_id] for item in packet}
+
+
+def test_a_shared_call_statement_keeps_both_import_dependencies():
+    source = "import numpy as np\nimport pandas as pd\nresult = np.array(pd.Series([1]))\n"
+    payload = build_upload_search_tool()(query="Find the NumPy and pandas call",
+                                        requirement=_requirement(["numpy.array", "pandas.Series"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    primary, = [hit for hit in payload.hits if hit.role == "candidate"]
+    contexts = {hit.evidence.id: hit.evidence.excerpt for hit in payload.hits if hit.role == "context"}
+    assert primary.evidence.excerpt == "result = np.array(pd.Series([1]))"
+    assert {contexts[identity] for identity in primary.supporting_evidence_ids} == {
+        "import numpy as np", "import pandas as pd",
+    }
+
+
+@pytest.mark.parametrize("call_count", [1, 2])
+def test_multiple_calls_share_one_binding_dependency_without_leaving_a_partial_bundle(call_count):
+    from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
+    from src.runtime.nodes.synthesis.evidence_selection import select_evidence_packet
+
+    imported = "import numpy as np"
+    calls = ["first = np.array([1])", "second = np.array([2])"]
+    expected = {imported + "\n" + calls[0], *calls[1:call_count]}
+    task = RetrievalTask(requirement_id="calls", route="upload", query="Find numpy.array calls", k=5,
+                         requirement={"symbols": ["numpy.array"], "match": "symbol"})
+    payload = build_upload_search_tool()(query=task.query, requirement=task.requirement,
+                                        retriever=_source_retriever("\n".join([imported, *calls])))
+    packet, associations = select_evidence_packet(
+        [hit.evidence for hit in payload.hits], query=task.query,
+        budget=RetrievedEvidenceBudget(100, sum(map(len, expected)), call_count),
+        requirements_by_evidence={hit.evidence.id: [task] for hit in payload.hits},
+        supporting_evidence_ids={(task.requirement_id, hit.evidence.id): hit.supporting_evidence_ids
+                                 for hit in payload.hits if hit.role == "candidate"},
+    )
+
+    assert {item.excerpt for item in packet} == expected
+    assert associations == {item.id: [task.requirement_id] for item in packet}
+
+
+@pytest.mark.parametrize("gap", ["\n\n", "\nunrelated = service\n"])
+@pytest.mark.parametrize("fits", [True, False])
+def test_binding_packet_preserves_only_whitespace_between_and_around_its_source_ranges(gap, fits):
+    from src.runtime.nodes.synthesis.budgets import RetrievedEvidenceBudget
+    from src.runtime.nodes.synthesis.evidence_selection import select_evidence_packet
+
+    imported = "import numpy as np"
+    branch = "if condition:\n    np = service\nelse:\n    result = np.array([1])"
+    source = "\n" + imported + gap + branch + "\n"
+    expected = {source} if gap.isspace() else {"\n" + imported, branch + "\n"}
+    task = RetrievalTask(requirement_id="binding", route="upload", query="Find the actual numpy.array call", k=5,
+                         requirement={"symbols": ["numpy.array"], "match": "symbol"})
+    payload = build_upload_search_tool()(query=task.query, requirement=task.requirement,
+                                        retriever=_source_retriever(source))
+    budget = RetrievedEvidenceBudget(len(source), sum(map(len, expected)) - (not fits), 2)
+    packet, _ = select_evidence_packet(
+        [hit.evidence for hit in payload.hits], query=task.query, budget=budget,
+        requirements_by_evidence={hit.evidence.id: [task] for hit in payload.hits},
+        supporting_evidence_ids={(task.requirement_id, hit.evidence.id): hit.supporting_evidence_ids
+                                 for hit in payload.hits if hit.role == "candidate"},
+    )
+
+    assert {item.excerpt for item in packet} == (expected if fits else set())
+    assert all(item.excerpt == source[item.selection.start:item.selection.end] for item in packet)
+    if fits and gap.isspace():
+        selected, = packet
+        assert selected.selection.start == 0
+        assert selected.selection.end == len(source)
+
+
+def test_conditional_alias_keeps_uncertain_source_candidate_after_the_branches_join():
+    source = "import numpy as np\nif condition:\n    np = service\nresult = np.array([1])\n"
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "unknown"
+    assert payload.diagnostics.missing_requirements == []
+    assert "source_symbol_binding_unverified" in payload.diagnostics.warnings
+    assert _symbol_excerpts(payload) == ["result = np.array([1])"]
+
+
+def test_conditional_rebinding_of_an_unaliased_import_is_not_a_verified_library_call():
+    source = "import numpy\nif condition:\n    numpy = service\nresult = numpy.array([1])\n"
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "unknown"
+    assert _symbol_excerpts(payload) == ["result = numpy.array([1])"]
+
+
+def test_rebound_import_name_remains_searchable_without_confirming_the_original_library():
+    source = "import numpy\nnumpy = service\nresult = numpy.array([1])\n"
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "unknown"
+    assert _symbol_excerpts(payload) == ["result = numpy.array([1])"]
+    assert "source_symbol_binding_unverified" in payload.diagnostics.warnings
+
+
+def test_matching_imports_in_both_branches_establish_one_binding():
+    source = "if condition:\n    import numpy as np\nelse:\n    import numpy as np\nresult = np.array([1])\n"
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "covered"
+    assert _symbol_excerpts(payload) == ["result = np.array([1])"]
+
+
+@pytest.mark.parametrize("pattern", ['{"client": np}', '[*np]', 'np'])
+def test_pattern_capture_shadows_an_import_alias(pattern):
+    source = f"import numpy as np\nmatch service:\n    case {pattern}:\n        result = np.array([1])\n"
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.hits == []
+    assert payload.diagnostics.answerability == "missing"
+
+
+def test_pattern_capture_preserves_a_requested_source_name_with_its_binding_context():
+    branch = 'match service:\n    case {"client": np}:\n        result = np.array([3, 4])'
+    source = "import numpy as np\n\n" + branch + "\n"
+    payload = build_upload_search_tool()(query="Explain whether this np.array call uses NumPy",
+                                        requirement=_requirement(["np.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "unknown"
+    assert payload.diagnostics.missing_requirements == []
+    assert _symbol_excerpts(payload) == ["        result = np.array([3, 4])"]
+    assert branch in {hit.evidence.excerpt for hit in payload.hits}
+    assert "source_symbol_binding_unverified" in payload.diagnostics.warnings
+
+
+def test_pattern_capture_does_not_change_the_binding_in_another_case():
+    source = ("import numpy as np\nmatch service:\n    case {'client': np}:\n        result = np.array([1])\n"
+              "    case None:\n        result = np.array([2])\n")
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "covered"
+    assert _symbol_excerpts(payload) == ["        result = np.array([2])"]
+
+
+def test_pattern_capture_is_bound_before_its_guard_is_checked():
+    source = ("import numpy as np\nmatch service:\n"
+              "    case {'client': np} if np.array([1]):\n        pass\n")
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.hits == []
+    assert payload.diagnostics.answerability == "missing"
+
+
+def test_failed_pattern_guard_keeps_its_possible_binding_in_later_cases():
+    source = ("import numpy as np\nmatch service:\n"
+              "    case {'client': np} if condition:\n        pass\n"
+              "    case _:\n        result = np.array([1])\n")
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "unknown"
+    assert _symbol_excerpts(payload) == ["        result = np.array([1])"]
+
+
+@pytest.mark.parametrize("branch", [
+    "for item in items:\n    np = service\n",
+    "while condition:\n    np = service\n",
+    "match service:\n    case {'client': np}:\n        pass\n",
+])
+def test_optional_branch_preserves_the_possible_original_import(branch):
+    source = "import numpy as np\n" + branch + "result = np.array([1])\n"
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "unknown"
+    assert payload.diagnostics.missing_requirements == []
+    assert _symbol_excerpts(payload) == ["result = np.array([1])"]
+
+
+def test_exception_handler_preserves_bindings_from_before_the_failure():
+    source = ("import numpy as np\ntry:\n    may_fail()\n    np = service\n"
+              "except ValueError:\n    result = np.array([1])\n")
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "unknown"
+    assert payload.diagnostics.missing_requirements == []
+    assert _symbol_excerpts(payload) == ["    result = np.array([1])"]
+
+
+def test_finally_preserves_bindings_from_an_unhandled_failure():
+    source = ("import numpy as np\ntry:\n    may_fail()\n    np = service\n"
+              "finally:\n    result = np.array([1])\n")
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "unknown"
+    assert _symbol_excerpts(payload) == ["    result = np.array([1])"]
+
+
+def test_conditional_import_is_visible_to_an_explicit_global_in_the_same_branch():
+    source = "if condition:\n    import numpy as np\n    def target():\n        global np\n        return np.array([1])\n"
+    payload = build_upload_search_tool()(query="numpy.array", requirement=_requirement(["numpy.array"], "symbol"),
+                                        retriever=_source_retriever(source))
+
+    assert payload.diagnostics.answerability == "covered"
+    assert _symbol_excerpts(payload) == ["        return np.array([1])"]
 
 
 def test_assignment_target_remains_searchable_by_its_source_name():
@@ -232,7 +524,7 @@ def test_assignment_target_remains_searchable_by_its_source_name():
                                         retriever=_source_retriever(source))
 
     assert payload.diagnostics.answerability == "covered"
-    assert [hit.evidence.excerpt for hit in payload.hits] == ["target = value"]
+    assert _symbol_excerpts(payload) == ["target = value"]
 
 
 @pytest.mark.parametrize("shadowed", [
@@ -245,7 +537,7 @@ def test_expression_scope_shadows_import_alias_without_changing_outer_scope(shad
                                         retriever=_source_retriever(source))
 
     assert payload.diagnostics.answerability == "covered"
-    assert [hit.evidence.excerpt for hit in payload.hits] == ["result = np.array([2])"]
+    assert _symbol_excerpts(payload) == ["result = np.array([2])"]
 
 
 def test_lambdas_on_the_same_line_have_distinct_lexical_bindings():
@@ -255,7 +547,7 @@ def test_lambdas_on_the_same_line_have_distinct_lexical_bindings():
                                         retriever=_source_retriever(source))
 
     assert payload.diagnostics.answerability == "covered"
-    assert [hit.evidence.excerpt for hit in payload.hits] == [expression]
+    assert _symbol_excerpts(payload) == [expression]
 
 
 def test_notebook_import_alias_is_shared_until_a_later_cell_rebinds_it(uploaded):
@@ -265,7 +557,7 @@ def test_notebook_import_alias_is_shared_until_a_later_cell_rebinds_it(uploaded)
                                             retriever=retriever)
 
     assert payload.diagnostics.answerability == "covered"
-    assert [hit.evidence.excerpt for hit in payload.hits] == ["result = np.array([1])"]
+    assert _symbol_excerpts(payload) == ["result = np.array([1])"]
     assert payload.hits[0].evidence.element.anchors[0].cell_index == 1
 
 
@@ -279,7 +571,7 @@ def test_generic_scope_preserves_unshadowed_outer_imports(definition):
                                         retriever=_source_retriever(source))
 
     assert payload.diagnostics.answerability == "covered"
-    assert [hit.evidence.excerpt.strip() for hit in payload.hits] == ["return np.array([1])"]
+    assert [excerpt.strip() for excerpt in _symbol_excerpts(payload)] == ["return np.array([1])"]
 
 
 @pytest.mark.parametrize("declaration", [
@@ -294,7 +586,7 @@ def test_annotation_and_default_expression_scopes_preserve_the_outer_alias(decla
                                         retriever=_source_retriever(source))
 
     assert payload.diagnostics.answerability == "covered"
-    assert [hit.evidence.excerpt for hit in payload.hits] == ["result = np.array([2])"]
+    assert _symbol_excerpts(payload) == ["result = np.array([2])"]
 
 
 def test_unavailable_compiler_scope_does_not_claim_symbol_absence():
@@ -320,7 +612,7 @@ def test_generic_type_parameter_bound_remains_searchable(declaration):
                                         retriever=_source_retriever(source))
 
     assert payload.diagnostics.answerability == "covered"
-    assert [hit.evidence.excerpt for hit in payload.hits] == [declaration]
+    assert _symbol_excerpts(payload) == [declaration]
 
 
 def test_planned_code_fragment_reaches_source_retrieval_without_losing_the_constraint():

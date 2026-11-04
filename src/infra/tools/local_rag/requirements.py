@@ -6,14 +6,14 @@ import ast
 import io
 import symtable
 import tokenize
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Literal
 
 from src.core.documents import DocumentElement, DocumentSnapshot, ParsedDocument
-from src.core.evidence import RetrievalScore, SearchHit, build_evidence, dedupe_search_hits
+from src.core.evidence import EvidenceRef, RetrievalScore, SearchHit, build_evidence, dedupe_search_hits
 from src.core.literal_matching import literal_aspect_present
 from src.core.planner_schema import RetrievalRequirement
 from src.core.python_source import PythonSourceMap
@@ -47,12 +47,27 @@ class _Source:
 
 
 @dataclass(frozen=True)
+class _SourceRange:
+    snapshot_id: str
+    element_id: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class _Binding:
+    canonical_name: str | None
+    origin: _SourceRange | None = None
+
+
+@dataclass(frozen=True)
 class _Occurrence:
     name: str
     node: ast.AST
     definition: bool
     priority: int
-    canonical_name: str = ""
+    canonical_names: frozenset[str | None] = frozenset()
+    context_ranges: frozenset[_SourceRange] = frozenset()
 
 
 class _SymbolScopeUnavailable(ValueError):
@@ -60,20 +75,64 @@ class _SymbolScopeUnavailable(ValueError):
 
 
 class _SymbolVisitor(ast.NodeVisitor):
-    def __init__(self, tree: ast.AST, aliases: dict[str, str], symbols: symtable.SymbolTable):
+    def __init__(self, tree: ast.AST, aliases: dict[str, frozenset[_Binding]], symbols: symtable.SymbolTable,
+                 source: _Source):
         self.occurrences: list[_Occurrence] = []
+        self.source = source
         self.scope: list[str] = []
         self.parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
         self.aliases = dict(aliases)
         self.module_aliases = self.aliases
         self.symbols = symbols
-        self.class_enclosing_aliases: dict[str, str] | None = None
+        self.class_enclosing_aliases: dict[str, frozenset[_Binding]] | None = None
         self.child_scopes: dict[tuple[int, str, int], Iterator[symtable.SymbolTable]] = {}
 
     def _reference(self, name: str, node: ast.AST, priority: int) -> None:
         root, separator, suffix = name.partition(".")
-        canonical = self.aliases.get(root, root) + (separator + suffix if separator else "")
-        self.occurrences.append(_Occurrence(name, self._statement(node), False, priority, canonical))
+        bindings = self.aliases.get(root, frozenset((_Binding(root),)))
+        canonical = frozenset(binding.canonical_name + (separator + suffix if separator else "")
+                              if binding.canonical_name is not None else None for binding in bindings)
+        context = {binding.origin for binding in bindings if binding.origin is not None}
+        statement = self._statement(node)
+        enclosing = self._context_node(statement)
+        if enclosing is not statement:
+            context.add(self._source_range(enclosing))
+        self.occurrences.append(_Occurrence(name, statement, False, priority, canonical, frozenset(context)))
+
+    def _source_range(self, node: ast.AST) -> _SourceRange:
+        start, end = _node_range(self.source.source_map, node, definition=False)
+        return _SourceRange(self.source.snapshot.snapshot_id, self.source.element.element_id, start, end)
+
+    def _context_node(self, node: ast.AST) -> ast.AST:
+        selected = self._statement(node)
+        parent = self.parents.get(selected)
+        while parent is not None and not isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            if isinstance(parent, (ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try, ast.TryStar,
+                                   ast.With, ast.AsyncWith, ast.Match)):
+                selected = parent
+            parent = self.parents.get(parent)
+        return selected
+
+    def _shadow(self, name: str, node: ast.AST | None = None) -> None:
+        if name in self.aliases:
+            # A local value is not the imported module, even when the module
+            # was imported without an alias and its spelling is unchanged.
+            origin = self._source_range(self._context_node(node)) if node is not None else None
+            self.aliases[name] = frozenset((_Binding(None, origin),))
+
+    def _visit_branches(self, branches: Sequence[Sequence[ast.AST]]) -> None:
+        entry = dict(self.aliases)
+        exits = []
+        for branch in branches:
+            # Keep the dictionary identity: explicit globals in a nested scope
+            # must see the current branch's module bindings.
+            self.aliases.clear()
+            self.aliases.update(entry)
+            for node in branch:
+                self.visit(node)
+            exits.append(dict(self.aliases))
+        self.aliases.clear()
+        self.aliases.update(_merge_aliases(exits))
 
     def _statement(self, node: ast.AST) -> ast.AST:
         while not isinstance(node, ast.stmt) and node in self.parents:
@@ -107,13 +166,13 @@ class _SymbolVisitor(ast.NodeVisitor):
                         self.visit(argument.annotation)
                 if node.returns is not None:
                     self.visit(node.returns)
-            self.aliases.pop(node.name, None)
+            self._shadow(node.name)
             with self._nested_scope(node.name, node.lineno, class_scope=isinstance(node, ast.ClassDef)):
                 self.scope.append(node.name)
                 for statement in node.body:
                     self.visit(statement)
                 self.scope.pop()
-        self.aliases.pop(node.name, None)
+        self._shadow(node.name)
 
     @contextmanager
     def _nested_scope(
@@ -135,11 +194,11 @@ class _SymbolVisitor(ast.NodeVisitor):
                 symbol_name = symbol.get_name()
                 if symbol.is_declared_global():
                     # An explicit global skips every enclosing lexical binding.
-                    self.aliases.pop(symbol_name, None)
+                    self._shadow(symbol_name)
                     if symbol_name in self.module_aliases:
                         self.aliases[symbol_name] = self.module_aliases[symbol_name]
                 elif not class_scope and symbol.is_local():
-                    self.aliases.pop(symbol_name, None)
+                    self._shadow(symbol_name)
         try:
             yield
         finally:
@@ -209,14 +268,16 @@ class _SymbolVisitor(ast.NodeVisitor):
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             name = alias.asname or alias.name.split(".")[0]
-            self.aliases[name] = alias.name if alias.asname else name
+            self.aliases[name] = frozenset((_Binding(
+                alias.name if alias.asname else name, self._source_range(self._context_node(node)),
+            ),))
             self.occurrences.append(_Occurrence(alias.name, node, False, 3))
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         for alias in node.names:
             name = alias.asname or alias.name
             qualified = ".".join(part for part in (node.module, alias.name) if part)
-            self.aliases[name] = qualified
+            self.aliases[name] = frozenset((_Binding(qualified, self._source_range(self._context_node(node))),))
             self.occurrences.append(_Occurrence(qualified, node, False, 3))
 
     def visit_Call(self, node: ast.Call) -> None:
@@ -227,7 +288,7 @@ class _SymbolVisitor(ast.NodeVisitor):
 
     def visit_Name(self, node: ast.Name) -> None:
         if not isinstance(node.ctx, ast.Load):
-            self.aliases.pop(node.id, None)
+            self._shadow(node.id, node)
         self._reference(node.id, node, 2)
 
     def visit_Assign(self, node: ast.Assign) -> None:
@@ -251,23 +312,96 @@ class _SymbolVisitor(ast.NodeVisitor):
         self.visit(node.value)
         self.visit(node.target)
 
+    def visit_If(self, node: ast.If) -> None:
+        self.visit(node.test)
+        self._visit_branches([node.body, node.orelse])
+
+    def visit_IfExp(self, node: ast.IfExp) -> None:
+        self.visit(node.test)
+        self._visit_branches([[node.body], [node.orelse]])
+
+    def visit_Match(self, node: ast.Match) -> None:
+        self.visit(node.subject)
+        unmatched = dict(self.aliases)
+        exits = []
+        has_unmatched_path = True
+        for case in node.cases:
+            self.aliases.clear()
+            self.aliases.update(unmatched)
+            self.visit(case.pattern)
+            if case.guard is not None:
+                self.visit(case.guard)
+                # A matched pattern binds its captures even when its guard is
+                # false, so the next case may see those changed names.
+                unmatched = (dict(self.aliases) if _irrefutable_pattern(case.pattern)
+                             else _merge_aliases([unmatched, self.aliases]))
+            elif _irrefutable_pattern(case.pattern):
+                has_unmatched_path = False
+            for statement in case.body:
+                self.visit(statement)
+            exits.append(dict(self.aliases))
+        if has_unmatched_path:
+            exits.append(unmatched)
+        self.aliases.clear()
+        self.aliases.update(_merge_aliases(exits))
+
+    def visit_MatchAs(self, node: ast.MatchAs) -> None:
+        if node.pattern is not None:
+            self.visit(node.pattern)
+        if node.name is not None:
+            self._shadow(node.name, node)
+
+    def visit_MatchStar(self, node: ast.MatchStar) -> None:
+        if node.name is not None:
+            self._shadow(node.name, node)
+
+    def visit_MatchMapping(self, node: ast.MatchMapping) -> None:
+        self.generic_visit(node)
+        if node.rest is not None:
+            self._shadow(node.rest, node)
+
     def visit_For(self, node: ast.For | ast.AsyncFor) -> None:
         self.visit(node.iter)
-        self.visit(node.target)
-        for statement in (*node.body, *node.orelse):
-            self.visit(statement)
+        self._visit_branches([[], [node.target, *node.body]])
+        self._visit_branches([[], node.orelse])
 
     visit_AsyncFor = visit_For
+
+    def visit_While(self, node: ast.While) -> None:
+        self.visit(node.test)
+        self._visit_branches([[], node.body])
+        self._visit_branches([[], node.orelse])
+
+    def visit_Try(self, node: ast.Try | ast.TryStar) -> None:
+        interrupted = [dict(self.aliases)]
+        for statement in node.body:
+            self.visit(statement)
+            interrupted.append(dict(self.aliases))
+        for statement in node.orelse:
+            self.visit(statement)
+        exits = [dict(self.aliases)]
+        handler_entry = _merge_aliases(interrupted)
+        for handler in node.handlers:
+            self.aliases.clear()
+            self.aliases.update(handler_entry)
+            self.visit(handler)
+            exits.append(dict(self.aliases))
+        self.aliases.clear()
+        self.aliases.update(_merge_aliases([*exits, *interrupted] if node.finalbody else exits))
+        for statement in node.finalbody:
+            self.visit(statement)
+
+    visit_TryStar = visit_Try
 
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
         if node.type is not None:
             self.visit(node.type)
         if node.name is not None:
-            self.aliases.pop(node.name, None)
+            self._shadow(node.name, node)
         for statement in node.body:
             self.visit(statement)
         if node.name is not None:
-            self.aliases.pop(node.name, None)
+            self._shadow(node.name, node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         name = _dotted_name(node)
@@ -285,10 +419,31 @@ def _dotted_name(node: ast.AST) -> str:
     return ""
 
 
-def _matches(requested: str, occurrence: _Occurrence) -> bool:
-    names = [occurrence.name, occurrence.canonical_name]
+def _merge_aliases(branches: list[dict[str, frozenset[_Binding]]]) -> dict[str, frozenset[_Binding]]:
+    names = {name for branch in branches for name in branch}
+    return {name: frozenset(binding for branch in branches
+                            for binding in branch.get(name, frozenset((_Binding(None),))))
+            for name in names}
+
+
+def _irrefutable_pattern(pattern: ast.pattern) -> bool:
+    if isinstance(pattern, ast.MatchAs):
+        return pattern.pattern is None or _irrefutable_pattern(pattern.pattern)
+    return isinstance(pattern, ast.MatchOr) and any(_irrefutable_pattern(item) for item in pattern.patterns)
+
+
+def _matches(requested: str, occurrence: _Occurrence, *, certain: bool = False) -> bool:
+    names = [occurrence.name, *(name for name in occurrence.canonical_names if name is not None)]
     if "." not in requested:
         return any(name.rsplit(".", 1)[-1] == requested for name in names)
+    if not certain and requested == occurrence.name:
+        # Finding the requested source spelling does not prove which object it
+        # names. Keep its original binding context for semantic verification.
+        return True
+    if occurrence.canonical_names == frozenset((None,)):
+        return False
+    if certain and len(occurrence.canonical_names) > 1:
+        return False
     return any(name == requested or (occurrence.definition and name.endswith("." + requested)) for name in names)
 
 
@@ -376,10 +531,11 @@ def resolve_source_requirement(
     exhaustive = bool(documents) and all(document.snapshot.capture_scope == "full_document"
                                         and document.snapshot.parser != "docling" for document in documents)
     sources = [_Source(document.snapshot, element) for document in documents for element in document.elements]
+    sources_by_key = {(source.snapshot.snapshot_id, source.element.element_id): source for source in sources}
     symbols = requirement.symbols
     by_symbol: dict[str, list[tuple[int, _Source, _Occurrence, tuple[int, int]]]] = {name: [] for name in symbols}
     warnings: list[str] = []
-    aliases: dict[str, str] = {}
+    aliases: dict[str, frozenset[_Binding]] = {}
     alias_snapshot: str | None = None
     for source in sources:
         if source.snapshot.parser == "docling":
@@ -399,7 +555,7 @@ def resolve_source_requirement(
             exhaustive = False
             warnings.append("source_symbol_analysis_unavailable")
             continue
-        visitor = _SymbolVisitor(tree, aliases, symbols_table)
+        visitor = _SymbolVisitor(tree, aliases, symbols_table, source)
         try:
             visitor.visit(tree)
         except _SymbolScopeUnavailable:
@@ -418,9 +574,10 @@ def resolve_source_requirement(
                     by_symbol[symbol].append((occurrence.priority, source, occurrence, bounds))
 
     hits: list[SearchHit] = []
+    supporting_evidence: dict[_SourceRange, EvidenceRef] = {}
     covered_aspects: set[str] = set()
     aspects_by_file: dict[str, set[str]] = {file_id: set() for file_id in requirement.file_ids}
-    for matches in by_symbol.values():
+    for symbol, matches in by_symbol.items():
         if not matches:
             continue
         # A call and its implementation establish different facts. Keep both
@@ -431,18 +588,36 @@ def resolve_source_requirement(
         preferred_by_file = {}
         for priority, source, occurrence, _bounds in matches:
             key = (source.snapshot.snapshot_id if scoped else "all", occurrence.definition)
-            preferred_by_file[key] = min(priority, preferred_by_file.get(key, priority))
+            preference = (not _matches(symbol, occurrence, certain=True), priority)
+            preferred_by_file[key] = min(preference, preferred_by_file.get(key, preference))
         for priority, source, occurrence, (start, end) in matches:
             key = (source.snapshot.snapshot_id if scoped else "all", occurrence.definition)
-            if priority != preferred_by_file[key]:
+            if (not _matches(symbol, occurrence, certain=True), priority) != preferred_by_file[key]:
                 continue
             evidence = build_evidence(snapshot=source.snapshot, element=source.element, start=start, end=end)
-            hits.append(SearchHit(evidence=evidence, score=RetrievalScore(metric="source_symbol", direction="higher"), rank=len(hits) + 1))
+            for selected in occurrence.context_ranges:
+                if selected not in supporting_evidence:
+                    context_source = sources_by_key[(selected.snapshot_id, selected.element_id)]
+                    supporting_evidence[selected] = build_evidence(
+                        snapshot=context_source.snapshot, element=context_source.element,
+                        start=selected.start, end=selected.end,
+                    )
+            hits.append(SearchHit(
+                evidence=evidence, score=RetrievalScore(metric="source_symbol", direction="higher"), rank=len(hits) + 1,
+                supporting_evidence_ids=sorted({supporting_evidence[selected].id for selected in occurrence.context_ranges
+                                               if supporting_evidence[selected].id != evidence.id}),
+            ))
             terms = _code_terms(occurrence.node)
             terms.update(_fragment_terms(source, occurrence, requirement.aspects))
             covered_aspects.update(terms)
             if source.element.metadata.get("file_id") in aspects_by_file:
                 aspects_by_file[source.element.metadata["file_id"]].update(terms)
+    source_order = {key: index for index, key in enumerate(sources_by_key)}
+    for selected in sorted(supporting_evidence, key=lambda item: (
+        source_order[(item.snapshot_id, item.element_id)], item.start, item.end,
+    )):
+        hits.append(SearchHit(evidence=supporting_evidence[selected], role="context",
+                              score=RetrievalScore(metric="source_binding", direction="higher"), rank=len(hits) + 1))
     hits = [hit.model_copy(update={"rank": rank}) for rank, hit in enumerate(dedupe_search_hits(hits), start=1)]
     unresolved = [name for name, matches in by_symbol.items() if not matches]
     if requirement.file_ids:
@@ -456,6 +631,16 @@ def resolve_source_requirement(
         answerability = "unknown"
     else:
         answerability = "partial" if hits else "missing"
+    uncertain = False
+    for symbol, matches in by_symbol.items():
+        for file_id in requirement.file_ids or [None]:
+            scoped_matches = [occurrence for _priority, source, occurrence, _bounds in matches
+                              if file_id is None or source.element.metadata.get("file_id") == file_id]
+            if scoped_matches and not any(_matches(symbol, occurrence, certain=True) for occurrence in scoped_matches):
+                uncertain = True
+    if uncertain:
+        answerability = "unknown"
+        warnings.append("source_symbol_binding_unverified")
     aspects_unverified = any(aspect not in terms for terms in (list(aspects_by_file.values()) or [covered_aspects])
                              for aspect in requirement.aspects)
     if answerability == "covered" and (requirement.version or aspects_unverified):
