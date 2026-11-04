@@ -49,7 +49,7 @@ def test_table_packet_and_export_only_report_selected_cell_locations():
     )
     raw = str(messages[-1].content).split("\n", 2)[2]
     packet = json.loads(raw)
-    assert packet[0]["source_locations"] == [page2.model_dump(mode="json")]
+    assert packet[0]["source_locations"] == [page2.model_dump(mode="json", exclude={"cell_index"})]
     assert packet[0]["quality_issues"] == snapshot.quality_issues
     assert packet[0]["is_partial"] is True
     assert {cell["cell_id"] for cell in packet[0]["table_cells"]} == set(item.selection.cell_ids)

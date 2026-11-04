@@ -168,12 +168,14 @@ def request_call_budget(stage: str) -> CallBudget:
         return budgets[stage]
     # Pre-synthesis checks source validity before requirement coverage, then
     # repeats those two checks once after retrieval. Six bounded calls leave
-    # room for transient failures. Post-synthesis separately checks the body
-    # and cited requirements for the initial, repaired and filtered revisions.
+    # room for transient failures. Post-synthesis checks each source unit in
+    # its own input, then the whole body and cited requirements. The larger
+    # physical-call cap retains initial, repaired and filtered revisions;
+    # all calls and backoff still share the same 45-second active-time budget.
     if stage == "pre_synthesis_validation":
         budget = CallBudget(max_calls=6, timeout_seconds=90)
     elif stage == "post_synthesis_validation":
-        budget = CallBudget(max_calls=6)
+        budget = CallBudget(max_calls=36)
     else:
         budget = CallBudget()
     if budgets is not None:

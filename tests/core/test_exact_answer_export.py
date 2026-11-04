@@ -22,7 +22,7 @@ from src.runtime.nodes.session import add_user_message, make_summarize_node
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node, make_pre_synthesis_validation_node
 from tests.core.helpers import SequentialGraph, make_decisions_client, mock_chat_model, structured_model
-from tests.core.test_decisions_validation import _state
+from tests.core.test_decisions_validation import DecisionsBoundary, _state
 from tests.core.test_pending_request_delivery import _manager
 from tests.synthesis_fixtures import synthesis_excerpt_limits
 
@@ -53,7 +53,7 @@ class ExportPlanner:
         }).model_dump(mode="json")
 
 
-def export_graph(*, semantic_constraint=False, probabilities=None, post_probabilities=None, transform=False, action="save_text"):
+def export_graph(*, semantic_constraint=False, pre_decisions=None, post_probabilities=None, transform=False, action="save_text"):
     policy = ConversationMemoryPolicy()
     planner = ExportPlanner(semantic_constraint=semantic_constraint, transform=transform, action=action)
     synthesizer = mock_chat_model(
@@ -66,10 +66,12 @@ def export_graph(*, semantic_constraint=False, probabilities=None, post_probabil
         make_retrieve_dispatch_node(_unavailable, _unavailable, False),
         make_synthesize_node(synthesizer), memory_policy=policy,
         pre_synthesis_validation_node=make_pre_synthesis_validation_node(
-            False, excerpt_limits=synthesis_excerpt_limits(), decisions_client=make_decisions_client(probabilities)),
+            False, excerpt_limits=synthesis_excerpt_limits(),
+            decisions_client=pre_decisions if pre_decisions is not None else make_decisions_client()),
         post_synthesis_validation_node=make_post_synthesis_validation_node(
             False, decisions_client=make_decisions_client(
-                {"request_fulfilled": 0.01} if post_probabilities is None else post_probabilities)),
+                {"content_condition_0" if semantic_constraint else "request_fulfilled": 0.01}
+                if post_probabilities is None else post_probabilities)),
         action_postprocess_node=make_action_postprocess_node(build_save_text_tool(), _unavailable, False),
     )
 
@@ -140,15 +142,28 @@ def test_unchanged_export_retry_and_repeat_reuse_one_artifact(tmp_path, monkeypa
     assert len(list(tmp_path.glob("*.txt"))) == 1
 
 
-def test_copy_with_new_semantic_requirement_still_requires_semantic_validation(tmp_path, monkeypatch):
+@pytest.mark.parametrize("probability, expected_kind", [(0.01, "failure"), (0.99, "answer")])
+def test_copy_with_new_semantic_requirement_still_requires_semantic_validation(
+    tmp_path, monkeypatch, probability, expected_kind,
+):
     monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
-    result = export_graph(semantic_constraint=True).invoke(build_graph_state_input(
-        user_input="방금 답변이 새 조건을 충족하면 출처와 함께 저장해줘", previous_response=checked_source(),
+    source = checked_source()
+    result = export_graph(semantic_constraint=True, post_probabilities={
+        "grounded_0": 0.01, "request_fulfilled": 0.01, "content_condition_0": probability,
+    }).invoke(build_graph_state_input(
+        user_input="방금 답변이 새 조건을 충족하면 출처와 함께 저장해줘", previous_response=source,
         session_id="constrained-export-session",
     ))
-    assert result["response"].kind == "failure"
-    assert result["response"].result.actions == []
-    assert list(tmp_path.glob("*.txt")) == []
+    assert result["response"].kind == expected_kind
+    assert len(list(tmp_path.glob("*.txt"))) == (1 if expected_kind == "answer" else 0)
+    if expected_kind == "failure":
+        assert result["response"].result.actions == []
+    else:
+        answer = result["response"].result
+        assert answer.actions[0].status == "success"
+        assert answer.content == source.content
+        assert answer.citations == source.citations
+        assert answer.issues == source.issues
 
 
 def test_revalidated_copy_reuses_the_original_save_operation_and_artifact(tmp_path, monkeypatch):
@@ -156,49 +171,51 @@ def test_revalidated_copy_reuses_the_original_save_operation_and_artifact(tmp_pa
     source = checked_source()
     manager = _manager(SequentialGraph(
         export_graph(),
-        export_graph(semantic_constraint=True, post_probabilities={"request_fulfilled": 0.95}),
+        export_graph(semantic_constraint=True, post_probabilities={"content_condition_0": 0.95}),
     ))
-    manager.session.previous_response = source
+    manager.session.commit_previous_response(source)
 
     first = manager.run_agent_flow("방금 답변을 출처와 함께 저장해줘")
     repeated = manager.run_agent_flow("방금 답변이 새 조건을 충족하면 출처와 함께 저장해줘")
 
-    assert first["status"] == repeated["status"] == "completed"
-    assert first["response"]["semantic_validation"] != repeated["response"]["semantic_validation"]
-    first_receipt = first["response"]["actions"][0]
-    repeated_receipt = repeated["response"]["actions"][0]
-    assert repeated_receipt["operation"] == first_receipt["operation"]
-    assert repeated_receipt["artifact"] == first_receipt["artifact"]
+    assert first.outcome.status == repeated.outcome.status == "completed"
+    assert first.outcome.response.semantic_validation != repeated.outcome.response.semantic_validation
+    first_receipt = first.outcome.response.actions[0]
+    repeated_receipt = repeated.outcome.response.actions[0]
+    assert repeated_receipt.operation == first_receipt.operation
+    assert repeated_receipt.artifact == first_receipt.artifact
     assert len(list(tmp_path.glob("*.txt"))) == 1
 
 
 def test_export_does_not_rejudge_whether_existing_body_can_be_prepared(tmp_path, monkeypatch):
     monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
     source = checked_source()
-    result = export_graph(probabilities={"request_ready": 0.01, "compact_request_ready": 0.01}).invoke(
+    decisions = DecisionsBoundary()
+    result = export_graph(pre_decisions=decisions).invoke(
         build_graph_state_input(user_input="방금 답변을 저장해줘", previous_response=source,
                                 session_id="ready-export-session"))
     assert result["response"].kind == "answer"
     assert result["response"].result.actions[0].status == "success"
+    assert decisions.requests == []
 
 
 def test_export_failure_feedback_does_not_replace_target_of_a_followup_retry(tmp_path, monkeypatch):
     monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: tmp_path)
     source = checked_source()
     manager = _manager(SequentialGraph(export_graph(semantic_constraint=True), export_graph()))
-    manager.session.previous_response = source.model_copy(deep=True)
+    manager.session.commit_previous_response(source)
 
     failed = manager.run_agent_flow("방금 답변이 새 조건을 충족하면 출처와 함께 저장해줘")
 
-    assert failed["status"] == "failed"
-    assert failed["answer_id"] is None
+    assert failed.outcome.status == "failed"
+    assert failed.outcome.answer_id is None
     assert manager.session.previous_response == source
     assert manager.session.pending_request is None
     assert list(tmp_path.glob("*.txt")) == []
 
     retried = manager.run_agent_flow("방금 답변을 출처와 함께 txt 파일로 저장해줘")
-    assert retried["status"] == "completed"
-    assert retried["answer_id"] is not None
+    assert retried.outcome.status == "completed"
+    assert retried.outcome.answer_id is not None
 
 
 @pytest.mark.parametrize("action, prompt", [
@@ -211,7 +228,7 @@ def test_failed_transformation_keeps_original_answer_as_retry_target(tmp_path, m
     source = checked_source()
     expected_saved_bytes = export_answer_text(source, include_sources=True).encode("utf-8-sig")
     manager = _manager(SequentialGraph(export_graph(transform=True, action=action), export_graph()))
-    manager.session.previous_response = source.model_copy(deep=True)
+    manager.session.commit_previous_response(source)
     manager.session.commit_conversation_memory(
         messages=[
             HumanMessage(content="Path.exists()의 반환값을 설명해 주세요.", id="previous-question"),
@@ -223,10 +240,10 @@ def test_failed_transformation_keeps_original_answer_as_retry_target(tmp_path, m
 
     failed = manager.run_agent_flow(prompt)
 
-    assert failed["status"] == "failed"
-    assert failed["response"] is None
-    assert failed["problem"]["code"] == "answer_validation_failed"
-    assert failed["answer_id"] is None
+    assert failed.outcome.status == "failed"
+    assert failed.outcome.response is None
+    assert failed.outcome.problem.code == "answer_validation_failed"
+    assert failed.outcome.answer_id is None
     assert manager.session.previous_response == source
     assert manager.session.pending_request is None
     assert manager.session.snapshot_conversation_memory() == memory_before
@@ -234,13 +251,11 @@ def test_failed_transformation_keeps_original_answer_as_retry_target(tmp_path, m
 
     retried = manager.run_agent_flow("방금 답변을 출처와 함께 txt 파일로 저장해줘")
 
-    assert retried["status"] == "completed"
-    assert retried["answer_id"] is not None
-    assert {key: value for key, value in retried["response"].items() if key != "actions"} == source.model_dump(
-        mode="json", exclude={"actions"},
-    )
-    receipt = retried["response"]["actions"][0]
-    assert receipt["status"] == "success"
+    assert retried.outcome.status == "completed"
+    assert retried.outcome.answer_id is not None
+    assert retried.outcome.response.model_copy(update={"actions": []}) == source
+    receipt = retried.outcome.response.actions[0]
+    assert receipt.status == "success"
     saved_files = list(tmp_path.glob("*.txt"))
-    assert saved_files == [Path(receipt["file_path"])]
+    assert saved_files == [Path(receipt.file_path)]
     assert saved_files[0].read_bytes() == expected_saved_bytes

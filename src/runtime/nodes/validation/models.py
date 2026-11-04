@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
 
 from langchain_core.messages import BaseMessage
 
@@ -65,7 +64,6 @@ class ValidationAssessment:
     score_avg: float | None = None
     semantic_probabilities: dict[str, float] = field(default_factory=dict)
     semantic_refusals: set[str] = field(default_factory=set)
-    request_readiness_failed: bool = False
     evidence_verdicts: list[EvidenceVerdict] = field(default_factory=list)
     accepted_hits: list[SearchHit] = field(default_factory=list)
     decision_cache: list[DecisionCacheEntry] = field(default_factory=list)
@@ -83,7 +81,6 @@ class EvidencePreparationResult:
     failed_requirement_ids: set[str]
     failed_routes: set[str]
     retry_reason: RetryReason | None
-    request_failure: Literal["model_refusal", "evidence_insufficient"] | None
     score_avg: float | None
     semantic_probabilities: dict[str, float]
     semantic_refusals: set[str]

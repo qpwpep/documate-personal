@@ -444,7 +444,7 @@ def test_reserved_calls_block_new_batches_before_provider_request(question_count
     assert len(seen) == source_calls + 1
 
 
-@pytest.mark.parametrize("stage, max_calls", [(STAGE, 6), ("post_synthesis_validation", 6)])
+@pytest.mark.parametrize("stage, max_calls", [(STAGE, 6), ("post_synthesis_validation", 36)])
 def test_calls_share_the_stage_budget_across_retrieval_retries(invoke, stage, max_calls):
     result, seen, usage, diagnostics = invoke([decision()], repeat=max_calls + 1, stage=stage)
     assert result.problem.code == "call_budget_exhausted"
@@ -454,7 +454,7 @@ def test_calls_share_the_stage_budget_across_retrieval_retries(invoke, stage, ma
 
 
 def test_transient_failures_stop_at_stage_budget_without_sdk_nested_retries(invoke):
-    stage, max_calls = "post_synthesis_validation", 6
+    stage, max_calls = "post_synthesis_validation", 36
     result, seen, usage, diagnostics = invoke([
         httpx.Response(503, json={"error": {"code": "server_error"}}, headers={"retry-after": "0"}),
     ], stage=stage)

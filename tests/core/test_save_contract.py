@@ -5,7 +5,7 @@ import pytest
 
 from src.core.answer_schema import ActionReceipt, finalize_answer, text_document
 from src.core.contracts import RuntimeState, PlannerState, ResponseState
-from src.core.contracts.graph_state import PendingRequest
+from src.core.pending_request import PendingRequest
 from src.core.request_contracts import RequestContract
 from src.eval.config_models import BenchmarkCase
 from src.eval.decisions import policy_for_case
@@ -14,7 +14,7 @@ from src.infra.tools.save_text import build_save_text_tool
 from src.runtime.agent_runtime.tool_execution import capture_tool_execution
 from src.runtime.agent_runtime.debug_collector import DebugCollector
 from src.runtime.nodes.actions import make_action_postprocess_node
-from src.runtime.nodes.actions.receipts import build_save_receipt
+from src.infra.answer_export import build_save_receipt
 
 
 def _save_state(text="정확한 저장 본문", *, session_id="session-a"):
@@ -61,10 +61,12 @@ def test_reused_save_receipt_is_observed_without_tool_messages(tmp_path, monkeyp
         response={**state, **updates, "route_decisions": []}, graph_total_ms=0,
     )
 
-    assert debug["action_results"]["save_text"] == {
-        "status": "success", "file_path": receipt.file_path, "bytes": receipt.artifact.byte_count,
-        "error": None, "message": None, "error_code": None,
-    }
+    assert debug.action_results.save_text.status == "success"
+    assert debug.action_results.save_text.file_path == receipt.file_path
+    assert debug.action_results.save_text.bytes == receipt.artifact.byte_count
+    assert debug.action_results.save_text.error is None
+    assert debug.action_results.save_text.message is None
+    assert debug.action_results.save_text.error_code is None
     assert updates["response"].result.actions[0] == receipt
     assert len(list(tmp_path.glob("*.txt"))) == 1
 
@@ -143,14 +145,14 @@ def test_rejected_save_reuse_records_new_blocked_attempt(tmp_path, monkeypatch, 
         response={**state, **updates, "route_decisions": []},
         graph_total_ms=0,
     )
-    assert debug["action_results"]["save_text"]["error_code"] == receipt.error_code
-    assert debug["action_results"]["save_text"]["status"] == receipt.status
-    assert receipt.error_code not in debug["error_codes"]
+    assert debug.action_results.save_text.error_code == receipt.error_code
+    assert debug.action_results.save_text.status == receipt.status
+    assert receipt.error_code not in debug.error_codes
     policy = policy_for_case(BenchmarkCase(
         case_id="save-reuse", category="tool_action", query="저장해줘.", expected_tools=["save_text"],
     ))
     assessment = assess_execution_policy(
-        policy=policy, evidence=evidence, request_id="request", prior_turns=[], actions=[receipt],
+        policy=policy, evidence=evidence, execution_id="request", prior_turns=[], actions=[receipt],
         tool_calls=["save_text"], tool_call_count=1,
     )
     assert assessment.status == "compliant"

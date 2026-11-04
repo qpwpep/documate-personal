@@ -6,6 +6,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from src.core.answer_schema import AnswerDocument, export_answer_text, iter_content_units, text_document
+from src.core.answer_schema.source_locations import SOURCE_LOCATION_PLACEHOLDER
 from src.core.contracts import PlannerState, RetrievalState, DebugState, RetrievalDiagnostic
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
@@ -13,6 +14,8 @@ from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.planner_schema import PlannerOutput, RetrievalTask
 from src.core.request_contracts import ExtractBody, RequestContract
 from src.core.llm_errors import LLMCallError
+from src.infra.chunking import chunk_python_text
+from src.infra.tools.local_rag.requirements import resolve_source_requirement
 from src.runtime.nodes.synthesis import make_synthesize_node
 from src.runtime.nodes.validation import make_post_synthesis_validation_node
 from tests.core.helpers import make_decisions_client, mock_chat_model
@@ -91,8 +94,8 @@ def test_malformed_generation_becomes_explicit_original_source_fallback():
     assert all(check.support_status != "unsupported" for check in result.checks)
 
 
-def test_exact_upload_extraction_needs_no_model_generation():
-    """Explicit source extraction uses the same checked document contract without rewriting code."""
+def test_upload_extraction_preserves_the_selected_original_through_generation():
+    """Extraction follows the body instruction using the checked source packet."""
     hit = _hit("retries = 3\n", source="upload")
     state = _state([hit], query="retries 코드를 원문 그대로 발췌해줘")
     state["runtime"] = state["runtime"].model_copy(update={
@@ -104,7 +107,9 @@ def test_exact_upload_extraction_needs_no_model_generation():
         route="upload", requirement_id=task.requirement_id, status="success", answerability="covered", evidence_count=1,
     )])
     prepare_synthesis_state(state)
-    updates = make_synthesize_node(ModelBoundary(error=AssertionError("model should not run")))(state)
+    boundary = ModelBoundary()
+    updates = make_synthesize_node(boundary)(state)
+    assert boundary.packet[0]["excerpt"] == hit.evidence.excerpt
     assert updates["debug"].synthesis_errors == []
     assert any(check.support_status == "exact_match" for check in updates["response"].result.checks)
     assert updates["response"].result.citations[0].evidence.excerpt == hit.evidence.excerpt
@@ -113,31 +118,49 @@ def test_exact_upload_extraction_needs_no_model_generation():
     assert updates["response"].result.issues == []
 
 
-def test_rejected_exact_extraction_uses_repair_feedback_instead_of_repeating_the_same_shortcut():
-    """After semantic rejection, the normal recovery path can repair the displayed document."""
-    from src.core.contracts import RetryState
-
-    hit = _hit("retries = 3\n", source="upload")
-    state = _state([hit], query="retries 코드를 원문 그대로 발췌해줘")
-    state["runtime"] = state["runtime"].model_copy(update={"request_contract": RequestContract(body=ExtractBody())})
-    task = state["planner"].output.tasks[0]
-    state["debug"] = DebugState(retrieval_diagnostics=[RetrievalDiagnostic(
-        route="upload", requirement_id=task.requirement_id, status="success", answerability="covered", evidence_count=1,
-    )])
-    node = make_synthesize_node(ModelBoundary())
-    prepare_synthesis_state(state)
-    state.update(node(state))
-    assert state["response"].result.content.blocks[0].type == "code"
-    state["retry"] = RetryState(
-        needs_retry=True, retry_scope="reuse_hits_resynthesize", retry_reason="missing_content",
-        content_repair_attempt=1, retrieval_feedback="Repair the requested display without changing the selected original.",
+def test_extraction_uses_binding_context_without_copying_the_whole_packet():
+    source = "import numpy as np\n\nif use_service:\n    np = service\nelse:\n    result = np.array([1, 2])\n"
+    query = "branch.py에서 NumPy 호출 문장만 원문 그대로 발췌하고 줄 번호를 알려줘."
+    task = RetrievalTask(route="upload", requirement_id="array_call", query=query, k=5,
+                         requirement={"symbols": ["numpy.array"], "match": "symbol"})
+    document = chunk_python_text(path="branch.py", text=source, source_content=source.encode("utf-8"),
+                                source_uri="upload:///binding/branch.py", chunk_size=2000, chunk_overlap=0)
+    retrieved = resolve_source_requirement(requirement=task.requirement, source_documents=[document.parsed])
+    state = build_graph_state_input(
+        user_input=query, messages=[HumanMessage(content=query)],
+        request_contract=RequestContract(body=ExtractBody(instruction=query, requirement_ids=[task.requirement_id])),
+        planner=PlannerState(output=PlannerOutput(use_retrieval=True, tasks=[task])),
+        retrieval=RetrievalState(hit_log=[hit.model_copy(update={"requirement_id": task.requirement_id})
+                                         for hit in retrieved.hits]),
     )
+    prepare_synthesis_state(state)
+    packet, = state["retrieval"].prepared_evidence.normal.evidence
+    assert packet.excerpt == source
+    received = []
 
-    updates = node(state)
+    def respond(messages):
+        received.append(messages)
+        return AnswerDocument.model_validate({"blocks": [
+            {"type": "code", "language": "python", "content": {
+                "text": "    result = np.array([1, 2])", "basis": "source", "refs": ["e1"],
+            }},
+            {"type": "paragraph", "content": [{
+                "text": SOURCE_LOCATION_PLACEHOLDER, "basis": "source", "refs": ["e1"],
+                "source_location": {"ref": "e1", "start": 59, "end": 89},
+            }]},
+        ]})
 
-    # The HTTP/model boundary returns a repaired presentation of the same original.
-    assert updates["response"].result.content.blocks[0].type == "paragraph"
-    assert updates["response"].result.content.blocks[0].content[0].text == hit.evidence.excerpt
+    result = make_synthesize_node(mock_chat_model(respond))(state)["response"].result
+
+    assert result.content.blocks[0].content.text == "    result = np.array([1, 2])"
+    location = result.content.blocks[1].content[0]
+    assert location.source_location.model_dump() == {"ref": packet.id, "start": 59, "end": 89}
+    assert "6" in location.text
+    assert "import numpy" not in export_answer_text(result)
+    assert result.citations[0].evidence == packet
+    evidence_message = next(str(message.content) for message in received[0]
+                            if str(message.content).startswith("[Evidence Packet]"))
+    assert json.loads(evidence_message[evidence_message.index("\n[") + 1:])[0]["excerpt"] == source
 
 
 def test_semantic_repair_receives_failed_draft_with_current_refs_without_mutating_it():
@@ -153,7 +176,7 @@ def test_semantic_repair_receives_failed_draft_with_current_refs_without_mutatin
         return AnswerDocument.model_validate({"blocks": [{"type": "paragraph", "content": [
             {"text": "Default mode is unsafe.", "basis": "source", "refs": ["e1"]},
             {"text": "An unsupported source claim.", "basis": "source", "refs": ["e404"]},
-            {"text": "A source position.", "basis": "source", "refs": ["e1"],
+            {"text": SOURCE_LOCATION_PLACEHOLDER, "basis": "source", "refs": ["e1"],
              "source_location": {"ref": "e1", "start": 0, "end": 7}},
         ]}]})
 

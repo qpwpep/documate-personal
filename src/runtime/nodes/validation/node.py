@@ -4,6 +4,7 @@ import json
 import logging
 from dataclasses import replace
 
+from src.core.answer_schema.source_locations import SOURCE_LOCATION_PLACEHOLDER
 from src.core.contracts import GraphState
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
@@ -121,6 +122,8 @@ def _decide_retry_outcome(
             )
         if any(issue.startswith("source_location_") for issue in issue_codes):
             retrieval_feedback += (
+                f" Use a separate location-only unit with text={SOURCE_LOCATION_PLACEHOLDER!r}."
+                " Preserve requested literal code and explanations in separate units with source_location=null."
                 " Bind source_location.ref to its only refs entry and select element-character start/end offsets"
                 " inside that evidence selection using source_lines. The server generates physical line numbers."
                 " Do not put line numbers in free prose, count excerpt lines, or guess a source range."

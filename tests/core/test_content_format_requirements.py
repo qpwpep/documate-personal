@@ -7,6 +7,7 @@ from src.core.answer_schema import (
     AnswerDocument, CodeBlock, ContentUnit, HeadingBlock, ListBlock, ParagraphBlock,
     SourceLocationReference, finalize_answer, text_document,
 )
+from src.core.answer_schema.source_locations import SOURCE_LOCATION_PLACEHOLDER
 from src.core.contracts import PlannerState, ResponseState, RetryState
 from src.core.contracts.boundary.graph import build_graph_state_input
 from src.core.documents import DocumentElement, SourceAnchor, build_snapshot
@@ -64,7 +65,7 @@ def _source_location_answer(title, make_block):
                               line_start=1, line_end=1, precision="exact")],
     ))
     unit = ContentUnit(
-        text="source position", basis="source", refs=[evidence.id],
+        text=SOURCE_LOCATION_PLACEHOLDER, basis="source", refs=[evidence.id],
         source_location=SourceLocationReference(ref=evidence.id, start=0, end=len(text) - 1),
     )
     return finalize_answer(AnswerDocument(blocks=[make_block(unit)]), [evidence])

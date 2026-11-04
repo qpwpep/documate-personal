@@ -170,11 +170,11 @@ def test_rejected_docs_preserve_a_cited_upload_partial_without_replanning(
     ]}]})
     state.update(make_synthesize_node(mock_chat_model(lambda _messages: answer))(state))
     state.update(make_post_synthesis_validation_node(False, decisions_client=make_decisions_client())(state))
-    outcome = ResponseAssembler().assemble(response=state, debug_info={})
+    outcome = ResponseAssembler().assemble(response=state)
 
-    assert outcome["status"] == "partial"
-    assert outcome["problem"]["code"] == code
-    assert outcome["problem"]["next_action"] == next_action
+    assert outcome.status == "partial"
+    assert outcome.problem.code == code
+    assert outcome.problem.next_action == next_action
     assert "WORKER_COUNT의 값은 6입니다." in export_answer_text(state["response"].result)
     assert state["response"].result.citations
     assert "answer_incomplete" in {issue.code for issue in state["response"].result.issues}

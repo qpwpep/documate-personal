@@ -1,6 +1,10 @@
 """Evidence preparation reserves shared Decisions capacity for final packet checks."""
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from src.core.contracts import DebugState, PlannerState, ResponseState, RetrievalDiagnostic, RetrievalState
 from src.core.evidence import RetrievalScore, SearchHit
 from src.core.planner_schema import PlannerOutput, RetrievalTask
@@ -71,8 +75,8 @@ def test_many_candidates_can_finish_packet_checks_after_retrieval_with_the_same_
     """The original request's call cap also covers preparation after one re-search."""
     state = _many_candidates_state()
     boundary = DecisionsBoundary({
-        name: 0.1 for index in range(4)
-        for name in (f"requirement_{index}", f"compact_requirement_{index}")
+        f"{base}_target_analysis_supported": 0.1 for index in range(4)
+        for base in (f"requirement_{index}", f"compact_requirement_{index}")
     })
     node = make_pre_synthesis_validation_node(
         False, decisions_client=boundary, excerpt_limits=synthesis_excerpt_limits(),
@@ -156,3 +160,48 @@ def test_cached_source_judgments_keep_the_prepared_packet_when_no_new_question_b
     assert diagnostics == []
     assert budget.calls == len(boundary.requests) == first_calls
     assert budget.calls <= 6
+
+
+@pytest.mark.parametrize("requirement_count,source_questions", [(50, 400), (51, 200)])
+def test_packet_batch_boundary_preserves_capacity_for_both_requirement_criteria(
+    requirement_count, source_questions,
+):
+    """The 201st mandatory packet question takes a batch from optional source work."""
+    state = _state()
+    original_task = state["planner"].output.tasks[0].model_copy(deep=True)
+    original_task.requirement.aspects = [f"option_{index}" for index in range(8)]
+    tasks = [original_task.model_copy(update={"requirement_id": f"requirement_{index}"})
+             for index in range(requirement_count)]
+    original_hit = state["retrieval"].hit_log[0]
+    evidence = [_evidence(
+        f"Path.exists documentation passage {index}. "
+        + "Path.exists returns False for a missing path. " * 15,
+    ) for index in range(8)]
+    state["planner"] = PlannerState(output=PlannerOutput(use_retrieval=True, tasks=tasks))
+    state["retrieval"] = RetrievalState(hit_log=[
+        original_hit.model_copy(update={"requirement_id": task.requirement_id,
+                                        "rank": index + 1, "evidence": item})
+        for task in tasks for index, item in enumerate(evidence)
+    ])
+    state["response"] = ResponseState()
+    state["debug"] = DebugState(retrieval_diagnostics=[RetrievalDiagnostic(
+        route="docs", requirement_id=task.requirement_id, status="success",
+        answerability="covered", evidence_count=8,
+    ) for task in tasks])
+    boundary = DecisionsBoundary()
+    node = make_pre_synthesis_validation_node(
+        False, decisions_client=boundary, excerpt_limits=synthesis_excerpt_limits(),
+    )
+
+    with capture_llm_diagnostics() as diagnostics:
+        state.update(node(state))
+        budget = request_call_budget("pre_synthesis_validation")
+
+    source_calls = [call for call in boundary.requests if "evidence" in json.loads(call["input"])]
+    assert sum(len(call["questions"]) for call in source_calls) == source_questions
+    assert all(len(call["questions"]) <= 200 for call in boundary.requests)
+    _assert_ready_for_every_requirement(state)
+    assert diagnostics == []
+    assert budget.max_calls == 6
+    assert budget.timeout_seconds == 90
+    assert budget.calls == len(boundary.requests) <= 6

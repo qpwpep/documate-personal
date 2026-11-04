@@ -109,7 +109,7 @@ def make_pre_synthesis_validation_node(
         })
         needs_retry, next_retry_context, retrieval_feedback = build_retry_update(
             retry_context=retry_context,
-            retry_reason=None if preparation.request_failure is not None else preparation.retry_reason,
+            retry_reason=preparation.retry_reason,
             planner_output=snapshot.planner_output,
             score_avg=preparation.score_avg,
             failed_routes=preparation.failed_routes,
@@ -118,16 +118,6 @@ def make_pre_synthesis_validation_node(
             current_attempt_retrieval_diagnostics=snapshot.current_attempt_retrieval_diagnostics,
             request_contract=snapshot.request_contract,
         )
-        if preparation.request_failure is not None:
-            # A global readiness failure is not evidence that any accepted
-            # source is bad. Re-searching those sources cannot repair it.
-            needs_retry = False
-            next_retry_context = next_retry_context.model_copy(update={
-                "needs_retry": False, "content_repair_attempt": retry_context.content_repair_attempt,
-                "retry_scope": "refresh_routes", "retry_reason": "missing_content",
-                "preserved_hits": list(preparation.accepted_hits),
-            })
-
         if preparation.semantic_probabilities or preparation.semantic_refusals:
             failures = {name: round(value, 4) for name, value in preparation.semantic_probabilities.items()
                         if value < pass_threshold}
@@ -172,16 +162,7 @@ def make_pre_synthesis_validation_node(
             "retry": next_retry_context,
             "retrieval": retrieval,
         }
-        if preparation.request_failure is not None:
-            updates.update(build_followup_updates(
-                "요청의 내용과 조건에 맞는 답변을 준비할 수 있는지 확인하지 못했습니다. 요청을 더 구체적으로 알려 주세요.",
-                attempt=response.synthesis_attempt, kind="failure",
-                problem=make_problem(
-                    preparation.request_failure,
-                    "pre_synthesis_validation",
-                ), **stamp,
-            ))
-        elif preparation.retry_reason is not None and not needs_retry:
+        if preparation.retry_reason is not None and not needs_retry:
             usable_hits = [hit for hit in snapshot.parsed_hits if tasks_for_hit(hit, snapshot.planner_output)]
             if usable_hits:
                 # Preserve the failed obligations while allowing a grounded partial

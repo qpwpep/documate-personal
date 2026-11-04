@@ -35,9 +35,10 @@ def test_unrelated_extra_citation_requires_repair_even_when_the_claim_is_support
     assert updates["retry"].retry_scope == "reuse_hits_resynthesize"
     assert "semantic_citation_relevance:b0.content.0" in updates["retry"].retrieval_feedback
     body_input = json.loads(boundary.requests[0]["input"])
-    assert {source["id"] for source in body_input["units"][0]["cited_sources"]} == {
-        item.id for item in state["response"].evidence_packet
-    }
+    assert set(body_input) == {"units"}
+    assert len(body_input["units"]) == 1
+    assert [question["name"] for question in boundary.requests[0]["questions"]] == ["grounded_0", "citations_0"]
+    assert {source["id"] for source in body_input["units"][0]["cited_sources"]} == {"e1", "e2"}
 
 
 def test_semantically_approved_complementary_citations_keep_the_exact_source_ranges():

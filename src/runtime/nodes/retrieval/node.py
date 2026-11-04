@@ -81,13 +81,13 @@ def _build_route_handlers(
     prior_diagnostics: list[RetrievalDiagnostic] | None = None,
     prior_hits: list[SearchHit] | None = None,
 ) -> dict[str, tuple[str, Any]]:
-    def docs_search(task: RetrievalTask, execution_id: str):
+    def docs_search(task: RetrievalTask, invocation_id: str):
         latest = next((item for item in reversed(prior_diagnostics or [])
                        if item.requirement_id == task.requirement_id), None)
         # Each result carries the current completion set. A failed refresh can
         # remove a prior marker, so unioning historical results would revive it.
         completed = list(latest.completed_requests) if latest is not None else []
-        return invoke_tool("tavily_search", tavily_search_tool, execution_id=execution_id, query=task.query, k=task.k,
+        return invoke_tool("tavily_search", tavily_search_tool, invocation_id=invocation_id, query=task.query, k=task.k,
                                   requirement=task.requirement,
                                   completed_requests=completed,
                                   previous_hits=[hit for hit in (prior_hits or []) if hit.requirement_id == task.requirement_id],
@@ -102,7 +102,7 @@ def _build_route_handlers(
         ),
         "upload": (
             "upload_search",
-            lambda task, execution_id: invoke_tool("upload_search", upload_search_tool, execution_id=execution_id,
+            lambda task, invocation_id: invoke_tool("upload_search", upload_search_tool, invocation_id=invocation_id,
                 query=task.query,
                 k=task.k,
                 retriever=runtime.retriever,

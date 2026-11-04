@@ -69,32 +69,32 @@ def test_exhausted_answer_validation_never_publishes_uncited_prepared_sources(in
     )
 
     updates = make_post_synthesis_validation_node(
-        False, decisions_client=DecisionsBoundary({"requirement_0": 0.33}),
+        False, decisions_client=DecisionsBoundary({"requirement_0_target_analysis_supported": 0.33}),
     )(state)
-    outcome = ResponseAssembler().assemble(response={**state, **updates}, debug_info={})
+    outcome = ResponseAssembler().assemble(response={**state, **updates})
 
-    assert outcome["status"] == "failed"
-    assert outcome["problem"]["code"] == ("model_output_invalid" if invalid_reference else "answer_validation_failed")
-    assert outcome["response"] is None
+    assert outcome.status == "failed"
+    assert outcome.problem.code == ("model_output_invalid" if invalid_reference else "answer_validation_failed")
+    assert outcome.response is None
     assert updates["response"].result.citations == []
     assert updates["response"].evidence_packet == []
     assert all(unrelated.excerpt not in message.content for message in updates["messages"])
 
 
-@pytest.mark.parametrize("predicate", ["request_fulfilled", "grounded_0", "requirement_0"])
+@pytest.mark.parametrize("predicate", ["request_fulfilled", "grounded_0", "requirement_0_target_analysis_supported"])
 def test_rejected_partial_answer_reports_validation_failure_and_keeps_retrieval_gap(predicate):
     state = _partial_state()
     original_body = state["response"].result.content
     decisions = DecisionsBoundary({predicate: 0.1})
 
     state.update(make_post_synthesis_validation_node(False, decisions_client=decisions)(state))
-    outcome = ResponseAssembler().assemble(response=state, debug_info={})
+    outcome = ResponseAssembler().assemble(response=state)
 
-    assert outcome["problem"]["code"] == "answer_validation_failed"
-    assert outcome["problem"]["stage"] == "validation"
-    assert outcome["problem"]["next_action"] == "retry_later"
-    assert outcome["status"] == "failed"
-    assert outcome["response"] is None
+    assert outcome.problem.code == "answer_validation_failed"
+    assert outcome.problem.stage == "validation"
+    assert outcome.problem.next_action == "retry_later"
+    assert outcome.status == "failed"
+    assert outcome.response is None
     assert state["response"].result.content != original_body
     assert state["response"].result.citations == []
     assert "retrieved_evidence_incomplete" in {issue.code for issue in state["response"].result.issues}
@@ -109,10 +109,10 @@ def test_local_output_condition_failure_has_validation_cause_even_with_terminal_
     })
 
     state.update(make_post_synthesis_validation_node(False, decisions_client=DecisionsBoundary())(state))
-    outcome = ResponseAssembler().assemble(response=state, debug_info={})
+    outcome = ResponseAssembler().assemble(response=state)
 
-    assert outcome["problem"]["code"] == "answer_validation_failed"
-    assert outcome["problem"]["stage"] == "validation"
+    assert outcome.problem.code == "answer_validation_failed"
+    assert outcome.problem.stage == "validation"
     assert "retrieved_evidence_incomplete" in {issue.code for issue in state["response"].result.issues}
 
 
@@ -121,11 +121,11 @@ def test_accepted_partial_answer_keeps_retrieval_cause_and_body():
     original_body = state["response"].result.content
 
     state.update(make_post_synthesis_validation_node(False, decisions_client=DecisionsBoundary())(state))
-    outcome = ResponseAssembler().assemble(response=state, debug_info={})
+    outcome = ResponseAssembler().assemble(response=state)
 
-    assert outcome["problem"]["code"] == "evidence_insufficient"
-    assert outcome["problem"]["stage"] == "retrieval"
-    assert outcome["status"] == "partial"
+    assert outcome.problem.code == "evidence_insufficient"
+    assert outcome.problem.stage == "retrieval"
+    assert outcome.status == "partial"
     assert state["response"].result.content == original_body
 
 
@@ -137,10 +137,10 @@ def test_existing_provider_or_generation_failure_keeps_its_cause_and_gap(code):
     decisions = DecisionsBoundary({"request_fulfilled": 0.1})
 
     state.update(make_post_synthesis_validation_node(False, decisions_client=decisions)(state))
-    outcome = ResponseAssembler().assemble(response=state, debug_info={})
+    outcome = ResponseAssembler().assemble(response=state)
 
-    assert outcome["problem"] == problem.model_dump(mode="json")
-    assert "retrieved_evidence_incomplete" in {issue["code"] for issue in outcome["response"]["issues"]}
+    assert outcome.problem == problem
+    assert "retrieved_evidence_incomplete" in {issue.code for issue in outcome.response.issues}
     assert decisions.requests == []
 
 
@@ -152,10 +152,10 @@ def test_unresolved_source_reference_remains_invalid_model_output():
     )
 
     state.update(make_post_synthesis_validation_node(False, decisions_client=DecisionsBoundary())(state))
-    outcome = ResponseAssembler().assemble(response=state, debug_info={})
+    outcome = ResponseAssembler().assemble(response=state)
 
-    assert outcome["problem"]["code"] == "model_output_invalid"
-    assert outcome["problem"]["stage"] == "validation"
-    assert outcome["status"] == "failed"
-    assert outcome["response"] is None
+    assert outcome.problem.code == "model_output_invalid"
+    assert outcome.problem.stage == "validation"
+    assert outcome.status == "failed"
+    assert outcome.response is None
     assert "retrieved_evidence_incomplete" in {issue.code for issue in state["response"].result.issues}

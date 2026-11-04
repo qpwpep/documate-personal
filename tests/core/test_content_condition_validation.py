@@ -154,6 +154,6 @@ def test_condition_check_preserves_exact_input_with_dots_code_and_whitespace():
     assert export_answer_text(response.result) == original
     report = response.result.semantic_validation
     assert report is not None and report.passed
-    assert [check.name for check in report.checks] == ["request_fulfilled", "content_condition:0"]
+    assert [check.name for check in report.checks] == ["content_condition:0"]
     payload = read_decision_input(decisions.requests[0]["input"])
     assert payload["rendered_response"]["body"]["blocks"][0]["content"][0]["text"] == original

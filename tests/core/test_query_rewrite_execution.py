@@ -29,6 +29,16 @@ QUERY_REWRITES = [
 ]
 
 
+def _requirement_questions(payload, context):
+    return {
+        question["name"]: next(
+            entry for entry in context["requirements"]
+            if f" entry named {entry['name']}," in question["instructions"]
+        )
+        for question in payload["questions"]
+    }
+
+
 @pytest.fixture
 def docs_http(monkeypatch):
     queries = []
@@ -137,19 +147,24 @@ def test_semantic_rejection_refreshes_covered_evidence_and_selects_new_source(mo
             })
         assert request.url.path == "/v1/decisions"
         context = read_decision_input(payload["input"])
-        question_names = {question["name"] for question in payload["questions"]}
         if "evidence" in context:
             probabilities = {
                 item["name"]: 0.99 if source_accepted or "One shape dimension can be -1" in item["source"]["excerpt"] else 0.1
                 for item in context["evidence"]
             }
         else:
+            entries = _requirement_questions(payload, context)
+            requested_entries = {entry["name"] for entry in entries.values()}
             excerpts = [source["excerpt"] for requirement in context["requirements"]
-                        if requirement["name"] in question_names and not requirement["name"].startswith("compact_")
+                        if requirement["name"] in requested_entries and not requirement["name"].startswith("compact_")
                         for source in requirement["sources"]]
             decision_sources.append(excerpts)
-            probability = 0.99 if any("One shape dimension can be -1" in text for text in excerpts) else 0.1
-            probabilities = {question["name"]: probability for question in payload["questions"]}
+            probabilities = {}
+            for name, entry in entries.items():
+                supported = bool(entry["sources"])
+                if name.endswith("_target_analysis_supported"):
+                    supported = any("One shape dimension can be -1" in source["excerpt"] for source in entry["sources"])
+                probabilities[name] = 0.99 if supported else 0.1
         return httpx.Response(200, json={
             "model": "gpt-6-luna",
             "answers": [{"type": "predicate", "name": question["name"], "probability": probabilities.get(question["name"], probabilities.get(question["name"].split("_support_")[0], 0.99))}
@@ -274,26 +289,23 @@ def test_semantic_rejection_refreshes_docs_alongside_another_requirement_timeout
             })
         assert request.url.path == "/v1/decisions"
         context = read_decision_input(payload["input"])
-        question_names = {question["name"] for question in payload["questions"]}
         if "evidence" in context:
             # Each source is useful even when it cannot establish every fact
             # requested for that requirement. Coverage is a separate judgment.
             probabilities = {item["name"]: 0.99 for item in context["evidence"]}
         else:
+            entries = _requirement_questions(payload, context)
+            requested_entries = {entry["name"] for entry in entries.values()}
             excerpts = {requirement["task"]["requirement_id"]: [source["excerpt"] for source in requirement["sources"]]
                         for requirement in context["requirements"]
-                        if requirement["name"] in question_names and not requirement["name"].startswith("compact_")}
+                        if requirement["name"] in requested_entries and not requirement["name"].startswith("compact_")}
             decision_sources.append(excerpts)
-            supported = {
-                symbol: any("One shape dimension can be -1" in text for text in texts)
-                if symbol == "reshape" else bool(texts)
-                for symbol, texts in excerpts.items()
-            }
-            probabilities = {requirement["name"]: 0.99 if supported[requirement["task"]["requirement_id"]] else 0.1
-                             for requirement in context["requirements"]
-                             if requirement["name"] in question_names and not requirement["name"].startswith("compact_")}
-            probabilities.update({question["name"]: 0.99 if all(supported.values()) else 0.1
-                                  for question in payload["questions"] if question["name"] not in probabilities})
+            probabilities = {}
+            for name, entry in entries.items():
+                supported = bool(entry["sources"])
+                if name.endswith("_target_analysis_supported") and entry["task"]["requirement_id"] == "reshape":
+                    supported = any("One shape dimension can be -1" in source["excerpt"] for source in entry["sources"])
+                probabilities[name] = 0.99 if supported else 0.1
         return httpx.Response(200, json={
             "model": "gpt-6-luna",
             "answers": [{"type": "predicate", "name": question["name"], "probability": probabilities.get(question["name"], probabilities.get(question["name"].split("_support_")[0], 0.99))}

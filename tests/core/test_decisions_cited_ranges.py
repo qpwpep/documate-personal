@@ -52,6 +52,12 @@ class PassingDecisions(DecisionsClient):
         })
 
 
+def _request_for_question(boundary, name):
+    request, = [call for call in boundary.requests
+                if any(question["name"] == name for question in call["questions"])]
+    return request
+
+
 def _state(*, route="docs", source_text="None으로 주면 저장하는 항목 수에 상한을 두지 않습니다."):
     contract = RequestContract(request_id="cited-ranges")
     requirement = ({
@@ -164,41 +170,51 @@ def test_post_requirement_batch_sees_only_actual_citations_and_records_requireme
 
     updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
 
-    body_request, request = boundary.requests
-    assert {question["name"] for question in body_request["questions"]} == {
-        "grounded_0", "request_fulfilled",
-    }
+    source_request = _request_for_question(boundary, "grounded_0")
+    body_request = _request_for_question(boundary, "request_fulfilled")
+    request = _request_for_question(boundary, "requirement_0_target_analysis_supported")
+    assert [question["name"] for question in source_request["questions"]] == ["grounded_0"]
+    assert [question["name"] for question in body_request["questions"]] == ["request_fulfilled"]
     payload = read_decision_input(request["input"])
-    assert set(payload) == {
-        "evaluation_policy", "evaluation_rubrics", "requirements", "sources", "tasks",
-    }
-    assert [question["name"] for question in request["questions"]] == ["requirement_0"]
+    assert set(payload) == {"requirements", "sources", "tasks"}
+    assert [question["name"] for question in request["questions"]] == [
+        "requirement_0_target_identified", "requirement_0_target_analysis_supported",
+    ]
     assert [source["id"] for source in payload["requirements"][0]["sources"]] == [cited.id]
     assert "UNCITED_SOURCE" not in request["input"]
+    source_payload = read_decision_input(source_request["input"])
+    assert set(source_payload) == {"units"}
+    assert [source["id"] for source in source_payload["units"][0]["cited_sources"]] == ["e1"]
+    assert "UNCITED_SOURCE" not in source_request["input"]
     body_payload = read_decision_input(body_request["input"])
-    assert [source["id"] for source in body_payload["units"][0]["cited_sources"]] == [cited.id]
     requirement_scope = body_payload["answer_scope"]["requirements"][0]
-    assert [source["id"] for source in requirement_scope["uncited_sources"]] == [uncited.id]
-    assert set(requirement_scope["available_source_ids"]) == {cited.id, uncited.id}
+    assert [source["id"] for source in requirement_scope["uncited_sources"]] == ["e2"]
+    assert set(requirement_scope["available_source_ids"]) == {"e1", "e2"}
     report = updates["response"].result.semantic_validation
     assert report.passed
-    assert next(check for check in report.checks if check.name == "requirement:cache_limit").probability == 0.99
+    assert {check.name: check.probability for check in report.checks if check.name.startswith("requirement_")} == {
+        "requirement_target_identified:cache_limit": 0.99,
+        "requirement_target_analysis_supported:cache_limit": 0.99,
+    }
 
 
 @pytest.mark.parametrize("refused", [False, True])
 def test_insufficient_actual_citations_trigger_requirement_repair_even_when_body_checks_pass(refused):
     state = _state()
     boundary = PassingDecisions(
-        {} if refused else {"requirement_0": 0.1}, refused_names={"requirement_0"} if refused else (),
+        {} if refused else {"requirement_0_target_analysis_supported": 0.1}, refused_names={"requirement_0_target_analysis_supported"} if refused else (),
     )
 
     updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
 
-    body_request, requirement_request = boundary.requests
-    assert {question["name"] for question in body_request["questions"]} == {
-        "grounded_0", "request_fulfilled",
-    }
-    assert [question["name"] for question in requirement_request["questions"]] == ["requirement_0"]
+    source_request = _request_for_question(boundary, "grounded_0")
+    body_request = _request_for_question(boundary, "request_fulfilled")
+    requirement_request = _request_for_question(boundary, "requirement_0_target_analysis_supported")
+    assert [question["name"] for question in source_request["questions"]] == ["grounded_0"]
+    assert [question["name"] for question in body_request["questions"]] == ["request_fulfilled"]
+    assert [question["name"] for question in requirement_request["questions"]] == [
+        "requirement_0_target_identified", "requirement_0_target_analysis_supported",
+    ]
     assert updates["retry"].needs_retry is True
     assert updates["retry"].retry_scope == "reuse_hits_resynthesize"
     assert updates["retry"].failed_requirement_ids == ["cache_limit"]
@@ -214,12 +230,16 @@ def test_terminal_requirement_gap_preserves_grounded_partial_answer_policy():
 
     updates = make_post_synthesis_validation_node(False, decisions_client=boundary)(state)
 
-    request, = boundary.requests
-    payload = read_decision_input(request["input"])
+    source_request = _request_for_question(boundary, "grounded_0")
+    body_request = _request_for_question(boundary, "request_fulfilled")
+    source_payload = read_decision_input(source_request["input"])
+    assert set(source_payload) == {"units"}
+    assert [question["name"] for question in source_request["questions"]] == ["grounded_0"]
+    payload = read_decision_input(body_request["input"])
     assert "requirements" not in payload
-    assert {question["name"] for question in request["questions"]} == {
-        "grounded_0", "request_fulfilled",
-    }
+    assert [question["name"] for question in body_request["questions"]] == ["request_fulfilled"]
+    assert not any(question["name"].startswith("requirement_")
+                   for call in boundary.requests for question in call["questions"])
     assert payload["terminal_failed_requirement_ids"] == ["cache_limit"]
     assert payload["rendered_response"]["notices"] == [
         "공식 문서에서 functools.lru_cache (확인 항목 maxsize)에 필요한 근거를 충분히 확인하지 못했습니다.",

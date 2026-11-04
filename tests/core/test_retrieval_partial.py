@@ -32,12 +32,12 @@ def test_failed_result_does_not_publish_unvalidated_document(failure_code: Failu
         attempt=1, evidence_packet=[], kind="failure", problem=problem,
     )
 
-    outcome = ResponseAssembler().assemble(response=state, debug_info={})
+    outcome = ResponseAssembler().assemble(response=state)
 
-    assert outcome["status"] == "failed"
-    assert outcome["response"] is None
-    assert outcome["message"] == problem.message
-    assert "UNVALIDATED_PROVIDER_TEXT" not in outcome["message"]
+    assert outcome.status == "failed"
+    assert outcome.response is None
+    assert outcome.message == problem.message
+    assert "UNVALIDATED_PROVIDER_TEXT" not in outcome.message
 
 
 @pytest.mark.parametrize("with_history", [False, True])
@@ -83,7 +83,7 @@ def test_mixed_upload_variables_keep_confirmed_value_and_identify_only_missing_i
     )
     # These are provider judgments, not a heuristic implementation of the rubric.
     # The missing requirement still fails when its exact source range is absent.
-    decisions = make_decisions_client({"request_ready": 0.1, f"requirement_{len(tasks) - 1}": 0.0})
+    decisions = make_decisions_client({f"requirement_{len(tasks) - 1}_target_analysis_supported": 0.0})
 
     state.update(make_retrieve_dispatch_node(None, build_upload_search_tool(), False)(state))
     state.update(make_pre_synthesis_validation_node(
@@ -91,13 +91,13 @@ def test_mixed_upload_variables_keep_confirmed_value_and_identify_only_missing_i
     )(state))
 
     if not has_known_value:
-        outcome = ResponseAssembler().assemble(response=state, debug_info={})
-        assert outcome["status"] == "failed"
-        assert outcome["problem"]["code"] == "evidence_insufficient"
-        assert outcome["problem"]["next_action"] == "supply_information"
-        assert "worker_profile.py" in outcome["message"]
-        assert all(symbol in outcome["message"] for symbol in requested_symbols)
-        assert outcome["response"] is None
+        outcome = ResponseAssembler().assemble(response=state)
+        assert outcome.status == "failed"
+        assert outcome.problem.code == "evidence_insufficient"
+        assert outcome.problem.next_action == "supply_information"
+        assert "worker_profile.py" in outcome.message
+        assert all(symbol in outcome.message for symbol in requested_symbols)
+        assert outcome.response is None
         assert not state["response"].result.citations
         assert state["retrieval"].prepared_evidence.normal.evidence == []
         return
@@ -118,9 +118,11 @@ def test_mixed_upload_variables_keep_confirmed_value_and_identify_only_missing_i
     state.update(make_synthesize_node(mock_chat_model(lambda _messages: answer))(state))
     post_decisions = DecisionsBoundary()
     state.update(make_post_synthesis_validation_node(False, decisions_client=post_decisions)(state))
-    outcome = ResponseAssembler().assemble(response=state, debug_info={})
+    outcome = ResponseAssembler().assemble(response=state)
 
-    body_payload = read_decision_input(post_decisions.requests[0]["input"])
+    body_request, = [call for call in post_decisions.requests
+                    if any(question["name"] == "request_fulfilled" for question in call["questions"])]
+    body_payload = read_decision_input(body_request["input"])
     gap, = body_payload["retrieval_gaps"]
     assert gap["task"]["requirement"]["symbols"] == ["FAILOVER_LIMIT"]
     assert gap["reason"] == "no_evidence"
@@ -129,8 +131,8 @@ def test_mixed_upload_variables_keep_confirmed_value_and_identify_only_missing_i
     assert diagnostic["status"] == "no_result"
     assert diagnostic["answerability"] == "missing"
     assert diagnostic["missing_requirements"] == [f"file:{file_id}:FAILOVER_LIMIT"]
-    assert outcome["status"] == "partial"
-    assert outcome["problem"]["code"] == "evidence_insufficient"
+    assert outcome.status == "partial"
+    assert outcome.problem.code == "evidence_insufficient"
     result = state["response"].result
     assert all(f"{symbol}의 값은 {value}입니다." in export_answer_text(result)
                for symbol, value in expected_values)
@@ -142,7 +144,12 @@ def test_mixed_upload_variables_keep_confirmed_value_and_identify_only_missing_i
     assert all(symbol not in gaps[0] for symbol, _ in expected_values)
     assert body_payload["retrieval_notice"] == gaps[0]
     assert body_payload["rendered_response"] == {
-        "body": result.content.model_dump(mode="json"), "notices": gaps,
+        "body": AnswerDocument.model_validate({"blocks": [
+            {"type": "paragraph", "content": [{"text": f"{symbol}의 값은 {value}입니다.", "basis": "source",
+                                               "refs": [alias]}]}
+            for (symbol, value), alias in zip(expected_values, ["e1", "e2"])
+        ]}).model_dump(mode="json"),
+        "notices": gaps,
     }
     assert "displayed_document" not in body_payload
     assert gaps[0] in export_answer_text(result, include_sources=True)

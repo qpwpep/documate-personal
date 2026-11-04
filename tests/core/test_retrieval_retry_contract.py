@@ -156,7 +156,8 @@ def test_refresh_evaluates_new_evidence_after_lexically_stronger_candidates_are_
                    for item in context.get(collection, [])}
         answers = []
         for question in payload["questions"]:
-            entry = entries[question["name"].split("_support_")[0]]
+            entry, = (item for name, item in entries.items()
+                      if f" entry named {name}," in question["instructions"])
             usable = source_url in json.dumps(entry)
             answers.append({"type": "predicate", "name": question["name"], "probability": 0.99 if usable else 0.1})
         return httpx.Response(200, json={"model": "gpt-6-luna", "answers": answers,
@@ -251,7 +252,7 @@ def test_rejected_source_cannot_keep_a_previously_covered_upload_requirement_com
     })
 
     decisions = make_decisions_client(
-        {"evidence_1": 0.1, "requirement_0": 0.1, "request_ready": 0.1},
+        {"evidence_1": 0.1, "requirement_0_target_analysis_supported": 0.1},
         refused_names={"evidence_1"} if rejected_status == "refused" else set(),
     )
     state.update(make_pre_synthesis_validation_node(

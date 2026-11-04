@@ -31,11 +31,11 @@ REQUEST = ("Copy only the following input exactly, without changes or additional
            "and save it as a TXT file. Input:\n" + ORIGINAL)
 
 
-def _state(*, answer=None, request=REQUEST):
+def _state(*, answer=None, request=REQUEST, original=ORIGINAL):
     contract = RequestContract(
         body=CopyInputBody(source=BoundInputText(
-            turn_id="current", text=ORIGINAL, start=request.index(ORIGINAL), end=len(request),
-            content_hash=sha256(ORIGINAL.encode("utf-8")).hexdigest(),
+            turn_id="current", text=original, start=request.index(original), end=len(request),
+            content_hash=sha256(original.encode("utf-8")).hexdigest(),
         )),
         actions=ActionContract(save_text=ActionRequest(intent="requested", evidence_ids=("request",))),
         evidence=(ContractEvidence(id="request", turn_id="current", quote=request,
@@ -77,13 +77,43 @@ def test_exact_input_is_saved_despite_low_factual_confidence_in_quoted_claim(tmp
 
 def test_bound_input_is_ready_without_a_model_rejudging_the_quoted_events():
     state = _state()
-    decisions = DecisionsBoundary({"request_ready": 0.01, "compact_request_ready": 0.01})
+    decisions = DecisionsBoundary()
 
     prepare_synthesis_state(state, decisions=decisions)
 
     assert not state["retry"].needs_retry
     assert state["retry"].retry_reason is None
     assert state["retrieval"].prepared_evidence.normal.failed_requirement_ids == []
+    assert decisions.requests == []
+    assert state["runtime"].request_contract.body.source.text == ORIGINAL
+
+
+def test_exact_input_with_satisfied_content_condition_is_saved_despite_low_request_confidence(
+    tmp_path, monkeypatch,
+):
+    output = tmp_path / "saved"
+    monkeypatch.setattr("src.infra.tools.save_text.get_save_text_output_dir", lambda: output)
+    state = _state(answer=AnswerContract(content=(ContentRequirement(
+        kind="explanation", mode="forbidden",
+        description="Additional explanation beyond the selected input text.",
+        evidence_ids=("request",),
+    ),)))
+    prepare_synthesis_state(state)
+    state.update(make_synthesize_node(mock_chat_model(DocumentModel().invoke))(state))
+    assert export_answer_text(state["response"].result) == ORIGINAL
+    decisions = DecisionsBoundary({"request_fulfilled": 0.01, "content_condition_0": 0.99})
+
+    state.update(make_post_synthesis_validation_node(False, decisions_client=decisions)(state))
+
+    assert state["response"].kind == "answer", "\n".join(state["debug"].validation_events)
+    assert export_answer_text(state["response"].result) == ORIGINAL
+    state.update(make_action_postprocess_node(build_save_text_tool(), None, False)(state))
+    answer = state["response"].result
+    assert export_answer_text(answer) == ORIGINAL
+    assert len(answer.actions) == 1
+    receipt = answer.actions[0]
+    assert receipt.kind == "save_text" and receipt.status == "success"
+    assert Path(receipt.file_path).read_bytes() == ORIGINAL.encode("utf-8-sig")
 
 
 @pytest.mark.parametrize("changed", [ORIGINAL + " Extra claim.", ORIGINAL.rstrip("."), ORIGINAL.replace(" ", "  ")])
@@ -118,8 +148,30 @@ def test_copy_with_an_additional_semantic_condition_still_checks_that_condition(
     if expected_kind == "answer":
         report = state["response"].result.semantic_validation
         assert [(check.name, check.probability) for check in report.checks] == [
-            ("request_fulfilled", 0.99), ("content_condition:0", probability),
+            ("content_condition:0", probability),
         ]
+
+
+def test_body_validation_excludes_delivery_state_but_retains_content_conditions():
+    condition = ContentRequirement(
+        kind="custom", mode="forbidden",
+        description="Do not add an explanation; save only the selected text.",
+        evidence_ids=("request",),
+    )
+    state = _state(answer=AnswerContract(content=(condition,)))
+    prepare_synthesis_state(state)
+    state.update(make_synthesize_node(mock_chat_model(DocumentModel().invoke))(state))
+    decisions = DecisionsBoundary()
+
+    state.update(make_post_synthesis_validation_node(False, decisions_client=decisions)(state))
+
+    request = json.loads(decisions.requests[0]["input"])["confirmed_request"]
+    assert "actions" not in request
+    assert "slack_recipient" not in request
+    assert request["body"]["source"]["text"] == ORIGINAL
+    assert request["answer"]["content"] == [condition.model_dump(mode="json")]
+    assert state["runtime"].request_contract.actions.save_text.intent == "requested"
+    assert state["response"].result.actions == []
 
 
 def test_copy_with_conflicting_local_format_remains_a_clarification():
@@ -165,6 +217,24 @@ def test_exact_input_checks_whole_body_sentence_bounds_without_rewriting(
         assert export_answer_text(state["response"].result) == ORIGINAL
 
 
+def test_exact_separator_copy_with_no_explanatory_prose_needs_no_semantic_report():
+    original = "---"
+    request = "Copy this separator exactly. Additional explanations: zero sentences. Input:\n" + original
+    state = _state(original=original, request=request, answer=AnswerContract(sentence_counts=(
+        SentenceCountRequirement(scope="additional explanations", minimum=0, maximum=0, evidence_ids=("request",)),
+    )))
+    prepare_synthesis_state(state)
+    state.update(make_synthesize_node(mock_chat_model(DocumentModel().invoke))(state))
+    decisions = DecisionsBoundary()
+
+    state.update(make_post_synthesis_validation_node(False, decisions_client=decisions)(state))
+
+    assert state["response"].kind == "answer"
+    assert export_answer_text(state["response"].result) == original
+    assert state["response"].result.semantic_validation is None
+    assert decisions.requests == []
+
+
 @pytest.mark.parametrize("scope,probability,expected_kind", [
     pytest.param(None, 0.01, "answer", id="whole-body-count-needs-no-semantic-check"),
     pytest.param("사과 색상 설명", 0.99, "answer", id="copied-unit-belongs-to-current-scope"),
@@ -206,11 +276,10 @@ def test_copied_answer_rechecks_sentence_scope_meaning_in_the_current_contract(
     assert state["response"].kind == expected_kind
     assert state["runtime"].request_contract == contract
     assert state["runtime"].previous_response == previous
+    assert preparation.requests == []
     if scope is None:
-        assert preparation.requests == []
         assert decisions.requests == []
     else:
-        assert preparation.requests
         assert decisions.requests
         payload = json.loads(decisions.requests[0]["input"])
         assert "sentence_counts" not in payload["confirmed_request"]["answer"]

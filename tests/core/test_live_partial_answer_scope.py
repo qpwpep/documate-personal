@@ -5,7 +5,7 @@ From the repository root in Git Bash:
 
 The default suite uses an approving provider boundary and real owned validation.
 Opt-in cases send fixed official-document excerpts and candidate answers to the
-configured Decisions model, permitting at most two paid calls per case. Sentence
+configured Decisions model, permitting at most three paid calls per case. Sentence
 quotas remain local checks regardless of semantic probability. Punctuation marks
 bound sentences; version/API dots and inline-code text do not create boundaries.
 No retrieval, generation, saving or delivery runs in this module.
@@ -165,7 +165,8 @@ def test_partial_sentence_quota_keeps_supported_body_and_contract(
 
     state.update(make_post_synthesis_validation_node(False, decisions_client=decisions)(state))
 
-    body_request = decisions.requests[0]
+    body_request, = [call for call in decisions.requests
+                    if any(question["name"] == "request_fulfilled" for question in call["questions"])]
     payload = json.loads(body_request["input"])
     assert payload["confirmed_request"]["answer"] == contract.answer.model_dump(
         mode="json", exclude={"sentence_counts"},
@@ -179,12 +180,12 @@ def test_partial_sentence_quota_keeps_supported_body_and_contract(
     assert payload["rendered_response"]["notices"] == [expected_notice]
     scope = {item["task"]["requirement_id"]: item for item in payload["answer_scope"]["requirements"]}
     assert scope["is_file"]["coverage"] == ("partial" if 0 in incomplete_task_indices else "required")
-    assert scope["is_file"]["available_source_ids"] == [state["response"].evidence_packet[0].id]
+    assert scope["is_file"]["available_source_ids"] == ["e1"]
     assert scope["is_file"]["cited_source_ids"] == scope["is_file"]["available_source_ids"]
     assert scope["is_dir"]["coverage"] == "unavailable"
     assert scope["is_dir"]["available_source_ids"] == scope["is_dir"]["cited_source_ids"] == []
-    outcome = ResponseAssembler().assemble(response=state, debug_info={})
-    assert outcome["status"] == "partial"
+    outcome = ResponseAssembler().assemble(response=state)
+    assert outcome.status == "partial"
     assert state["response"].result.content == original
     assert state["response"].result.semantic_validation.passed
     assert state["runtime"].request_contract == contract
@@ -200,19 +201,21 @@ def test_uncited_supported_target_is_not_exempted_by_a_terminal_gap(supported_ta
         "text": "확인한 내용은 없습니다.", "basis": "interaction", "refs": [], "sentence_scope": 1,
     }]}]})
     state["response"].result = finalize_answer(document, [evidence], retrieval_required=True)
-    boundary = DecisionsBoundary({"request_fulfilled": 0.1, "requirement_0": 0.1})
+    boundary = DecisionsBoundary({"request_fulfilled": 0.1, "requirement_0_target_analysis_supported": 0.1})
 
     state.update(make_post_synthesis_validation_node(False, decisions_client=boundary)(state))
 
-    payload = json.loads(boundary.requests[0]["input"])
+    body_request, = [call for call in boundary.requests
+                    if any(question["name"] == "request_fulfilled" for question in call["questions"])]
+    payload = json.loads(body_request["input"])
     scope = {item["task"]["requirement_id"]: item for item in payload["answer_scope"]["requirements"]}
     assert scope["is_file"]["coverage"] == ("partial" if supported_target_is_terminal else "required")
-    assert scope["is_file"]["available_source_ids"] == [evidence.id]
+    assert scope["is_file"]["available_source_ids"] == ["e1"]
     assert scope["is_file"]["cited_source_ids"] == []
     assert scope["is_file"]["uncited_sources"][0]["excerpt"] == SOURCE_TEXT
     assert scope["is_dir"]["coverage"] == "unavailable"
-    outcome = ResponseAssembler().assemble(response=state, debug_info={})
-    assert outcome["status"] == "failed"
+    outcome = ResponseAssembler().assemble(response=state)
+    assert outcome.status == "failed"
     assert "semantic_request_fulfillment" in state["retry"].retrieval_feedback
 
 
@@ -237,8 +240,8 @@ def test_local_sentence_violation_is_not_overridden_by_approving_decisions(
 
     state.update(make_post_synthesis_validation_node(False, decisions_client=decisions)(state))
 
-    outcome = ResponseAssembler().assemble(response=state, debug_info={})
-    assert outcome["status"] == "failed"
+    outcome = ResponseAssembler().assemble(response=state)
+    assert outcome.status == "failed"
     assert state["response"].result.content != original
     assert missing in state["retry"].retrieval_feedback
     assert state["response"].result.actions == []
@@ -251,7 +254,7 @@ def test_two_supported_targets_keep_their_own_sentence_quotas():
 
     state.update(make_post_synthesis_validation_node(False, decisions_client=DecisionsBoundary())(state))
 
-    assert ResponseAssembler().assemble(response=state, debug_info={})["status"] == "completed"
+    assert ResponseAssembler().assemble(response=state).status == "completed"
     assert state["response"].result.content == original
 
 
@@ -265,7 +268,7 @@ def test_partial_answer_does_not_waive_a_separate_whole_body_quota():
 
     state.update(make_post_synthesis_validation_node(False, decisions_client=DecisionsBoundary())(state))
 
-    assert ResponseAssembler().assemble(response=state, debug_info={})["status"] == "failed"
+    assert ResponseAssembler().assemble(response=state).status == "failed"
     assert "sentence_count:3" in state["retry"].retrieval_feedback
 
 
@@ -291,7 +294,7 @@ def test_independent_true_and_false_conditions_for_one_target_have_separate_quot
 
     state.update(make_post_synthesis_validation_node(False, decisions_client=DecisionsBoundary())(state))
 
-    assert ResponseAssembler().assemble(response=state, debug_info={})["status"] == "completed"
+    assert ResponseAssembler().assemble(response=state).status == "completed"
     assert state["response"].result.content == original
 
 
@@ -340,35 +343,35 @@ def test_live_answer_applies_sentence_count_to_supported_targets(
 
     monkeypatch.setattr(live_decisions_client, "evaluate", record_evaluation)
     with capture_llm_diagnostics():
-        request_call_budget("post_synthesis_validation").max_calls = 2
+        request_call_budget("post_synthesis_validation").max_calls = 3
         state.update(make_post_synthesis_validation_node(False, decisions_client=live_decisions_client)(state))
 
-    outcome = ResponseAssembler().assemble(response=state, debug_info={})
+    outcome = ResponseAssembler().assemble(response=state)
     response = state["response"].result
     probabilities = {name: value for evaluation in evaluations for name, value in evaluation.probabilities.items()}
     refused_names = {name for evaluation in evaluations for name in evaluation.refused_names}
     diagnostics = "\n".join([state["retry"].retrieval_feedback, *state["debug"].validation_events])
     print({
         "candidate": text,
-        "status": outcome["status"],
+        "status": outcome.status,
         "probabilities": probabilities,
         "refused_names": sorted(refused_names),
         "validation_events": state["debug"].validation_events,
     })
     if expected == "partial":
-        assert len(evaluations) == 2
-        assert outcome["status"] == "partial", diagnostics
-        assert outcome["problem"]["code"] == "evidence_insufficient"
+        assert len(evaluations) == 3
+        assert outcome.status == "partial", diagnostics
+        assert outcome.problem.code == "evidence_insufficient"
         assert response.content == original
         assert response.semantic_validation is not None and response.semantic_validation.passed
         assert any("pathlib.Path.is_dir" in issue.message for issue in response.issues)
     elif expected == "sentence_count":
         assert evaluations == []
         assert response.content != original, diagnostics
-        assert outcome["status"] == "failed"
+        assert outcome.status == "failed"
         assert "sentence_count" in state["retry"].retrieval_feedback, diagnostics
     else:
-        assert len(evaluations) == 2
+        assert len(evaluations) == 3
         assert response.content != original, diagnostics
-        assert outcome["status"] == "failed", diagnostics
+        assert outcome.status == "failed", diagnostics
         assert "semantic_" in state["retry"].retrieval_feedback, diagnostics

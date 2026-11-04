@@ -96,13 +96,13 @@ def test_mismatching_excerpt_fails_without_publishing_a_replacement_excerpt():
 
     assessment = assess_validation(snapshot)
     updates = apply_validation_outcome(snapshot=snapshot, assessment=assessment, attempt=1, needs_retry=False)
-    outcome = ResponseAssembler().assemble(response=updates, debug_info={})
+    outcome = ResponseAssembler().assemble(response=updates)
 
     assert assessment.checked_result.checks[0].support_status == "unsupported"
     assert assessment.retry_reason == "missing_content"
-    assert outcome["status"] == "failed"
-    assert outcome["problem"]["code"] == "model_output_invalid"
-    assert outcome["response"] is None
+    assert outcome.status == "failed"
+    assert outcome.problem.code == "model_output_invalid"
+    assert outcome.response is None
     result = updates["response"].result
     excerpts = [unit.text for _, unit in iter_content_units(result.content) if unit.basis == "excerpt"]
     assert excerpts == []

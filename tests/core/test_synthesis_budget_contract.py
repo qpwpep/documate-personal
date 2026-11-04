@@ -163,7 +163,7 @@ def test_compact_fallback_is_not_called_when_its_actual_ranges_are_insufficient(
     state = _state(_long_hits())
     prepare_synthesis_state(
         state, limits=ExcerptLimits(1800, 900),
-        decisions=make_decisions_client({"compact_requirement_0": 0.1, "compact_request_ready": 0.1}),
+        decisions=make_decisions_client({"compact_requirement_0_target_analysis_supported": 0.1}),
     )
     assert state["retrieval"].prepared_evidence.compact is None
     normal, compact = PacketEchoModel(timeout=True), PacketEchoModel()

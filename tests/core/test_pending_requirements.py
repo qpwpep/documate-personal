@@ -7,7 +7,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from src.core.contracts.boundary.graph import build_graph_state_input
-from src.core.contracts.graph_state import PendingRequest
+from src.core.pending_request import PendingRequest
 from src.core.llm_errors import LLMCallError
 from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import ContentRequirement, LayoutRequirement, LineCountRequirement, UserTurnSnapshot, WireRequestContract
