@@ -108,7 +108,7 @@ npm --prefix frontend run dev
 
 부분 답변은 실제로 답한 범위의 수량과 별도 전체 본문 수량을 그대로 지켜야 합니다. 비어 있는 개별 범위만 최소 수량 검사를 유예하고, 의미 검증이 검색 근거를 바탕으로 생략 가능 여부를 판단합니다. 로컬 수량·범위 위반은 `sentence_count:<항목 번호>` 또는 `sentence_scope`로 반환하며, 이미 실패가 확정된 초안에는 유료 사후 의미 검증을 호출하지 않습니다. 의미 검증은 수량을 다시 세지 않고 실제 내용이 지정 범위에 속하는지, 확인된 요청 내용을 빠뜨리지 않았는지와 근거성을 판정합니다. 판정용 계약 view에서는 `sentence_counts`를 제외하고, `answer_scope.sentence_scope_bindings`에 실제 표시 단위의 텍스트와 선언한 주제만 전달합니다. 원래 runtime 계약은 유지합니다. 높은 의미 점수도 로컬 위반을 무효화하지 못합니다.
 
-기본 통과 기준은 각 질문의 확률 `0.8` 이상입니다. 질문은 호출당 최대 200개로 나누며, `pre_synthesis_validation`은 최대 6회·90초, `post_synthesis_validation`은 최대 6회·45초의 예산을 사용합니다. 사전 검증의 원문·요구 충족 두 단계와 재검색 후 검증이 같은 역할 예산을 공유합니다. 사후 검증은 본문과 인용 요구의 충분성을 별도 호출로 판정하며, 최초 답변·한 번의 본문 보정·필터링한 답변의 재검사도 같은 6회 예산을 사용합니다. 배치와 일시 오류 재시도는 각 역할의 남은 호출 예산을 소비합니다. 역할별 시간에는 모델 호출과 재시도 대기만 누적하고 검색·다른 역할의 실행·로컬 처리는 포함하지 않습니다. 개별 호출 timeout 기본값은 20초이며 역할과 전체 요청의 남은 시간 중 작은 값을 넘기지 않습니다.
+기본 통과 기준은 각 질문의 확률 `0.8` 이상입니다. 질문은 호출당 최대 200개로 나누며, `pre_synthesis_validation`은 최대 6회·90초, `post_synthesis_validation`은 최대 36회·45초의 예산을 사용합니다. 사전 검증의 원문·요구 충족 두 단계와 재검색 후 검증이 같은 역할 예산을 공유합니다. 사후 검증은 자료 기반 내용 단위마다 독립 HTTP 호출을 순차 실행하고 본문 조건·요구별 인용 충분성을 별도로 판정하며, 최초 답변·한 번의 본문 보정·필터링한 답변의 재검사도 같은 36회 예산을 사용합니다. 각 단계는 뒤에 필요한 판정의 배치 수를 예약합니다. 내용 단위별 호출과 반복 입력은 비용에 포함되며, 큰 답변이 36회 또는 누적 API·backoff 45초 한도에 걸리면 검증을 통과시키지 않습니다. 질문마다 실행 지시문이 반복되므로 실제 요청 크기·입력 토큰 비용은 별도로 측정하며, 200개 질문 상한을 토큰 예산으로 해석하지 않습니다. 배치와 일시 오류 재시도는 각 역할의 남은 호출 예산을 소비합니다. 역할별 시간에는 모델 호출과 재시도 대기만 누적하고 검색·다른 역할의 실행·로컬 처리는 포함하지 않습니다. 개별 호출 timeout 기본값은 20초이며 역할과 전체 요청의 남은 시간 중 작은 값을 넘기지 않습니다.
 
 `REQUEST_TIMEOUT_SECONDS`는 세션 잠금을 얻은 뒤 한 질문의 전체 실행을 제한하며 기본값은 60초입니다. 요약·계획·검색·검증·생성·행동 실행을 모두 포함합니다. 경계에서 만료를 확인하면 `request_timeout`으로 종료하고 새로운 호출·행동·대화 기억 커밋을 차단합니다. 이미 완료된 저장·전송 영수증은 보존합니다. 동기 작업을 강제 종료하지 않으므로, SDK가 지정 timeout을 무시하거나 로컬 작업이 오래 걸리면 실패 응답은 설정 시간보다 늦게 도착할 수 있습니다. 역할별 소진은 `call_budget_exhausted`, 전체 요청 만료는 `request_timeout`, 최종 본문 검증 실패는 `answer_validation_failed`로 구분합니다.
 
@@ -255,15 +255,21 @@ planner의 `PlannedDocsLibrary`는 지원 출처의 canonical ID와 `unsupported
 | `missing_info` | 부족한 정보의 slot·원인·질문. 이미 해석된 행동 의사와 출력 요구를 유지 |
 | `status`, 준비 상태 | 서버 파생값. 본문 준비 가능성과 각 행동의 실행 준비를 별도로 계산 |
 
+`body.instruction`에는 표시 본문의 작성·발췌·변환·보존 조건만 넣고 실제 저장·전송 실행은 `actions`로 지정합니다. 인용할 원문이나 설명 주제에 포함된 저장·전송 표현은 그대로 두며, 대화 이력과 최신 원문·바인딩한 원본을 유지한 상태로 본문을 검사합니다.
+
 입력 복사·번역·수정은 `turn_id`, 원문 `quote`, 필요 시 1부터 세는 `occurrence`로 선택합니다. 서버는 정확히 일치하는 원문만 선택해 Unicode 문자 기준 `[start, end)`, 원문 텍스트, SHA-256을 확정합니다. 알 수 없는 발화 ID, 없는 구절, 여러 위치에 일치하는 구절을 구분하며 유사 문자열로 대체하지 않습니다. 이전·보류 답변은 서버가 해당 `AnswerResponse.content_hash`에 연결합니다. 모델 스키마에도 본문 타입별 유효한 참조 조합을 표현하며 서버 전용 hash·offset·실행 준비값을 모델에 생성시키지 않습니다.
 
-액션·답변 요구와 직전 답변의 aspect 참조는 공통 scope 규칙을 사용합니다. 근거는 해당 경로 또는 그 상위 경로에 속해야 하며, `current_request`는 전체 요청 범위입니다. aspect 참조는 이 scope 조건 외에도 현재 발화, `reference` 해석, 정확한 답변 인용과 requirement·aspect 연결을 요구합니다. 인용·단순 언급은 실행이나 강제 출력 조건의 근거가 될 수 없습니다. 계약을 누락하거나 해석하지 못하면 검색·저장·전송을 중단하며 키워드 fallback을 사용하지 않습니다. 이 계약은 내부 실행 상태이며, Slack 수신자와 전달 사실은 최종 `AnswerResponse.actions`에도 보존합니다.
+내용 조건의 `description`에는 내용의 대상·범위를 기록하고, 필수·금지는 `mode`로 표현합니다. 저장·복사 동작은 본문 작업과 행동 계약에 두며 내용 조건에 중복하지 않습니다. 정확한 복사의 ‘수정 없이’, ‘설명 추가 없이’는 본문 작업 자체가 보장하므로 별도 내용·서식 조건으로 만들지 않습니다. 원문 자체의 필수·금지 내용과 명시적인 서식 조건은 유지하며, 서식 변환이 필요하면 기존 바인딩 규칙으로 처리합니다. 금지 조건을 판정할 때도 사용자 근거와 의도를 함께 읽고 부정 표현을 다시 부정하지 않습니다.
+
+액션·답변 요구와 직전 답변의 aspect 참조는 공통 scope 규칙을 사용합니다. 근거는 해당 경로 또는 그 상위 경로에 속해야 하며, `current_request`는 전체 요청 범위입니다. aspect 참조는 이 scope 조건 외에도 현재 발화, `reference` 해석, 정확한 답변 인용과 requirement·aspect 연결을 요구합니다. 인용·단순 언급은 실행이나 강제 출력 조건의 근거가 될 수 없습니다. 계약을 누락하거나 해석하지 못하면 검색·저장·전송을 중단하며 키워드 fallback을 사용하지 않습니다. 권한 오류의 보정 메시지는 실패한 필드 경로와 참조 근거의 `scope`·`interpretation`, 허용하는 해석을 명시합니다. 보정 과정에서도 사용자 근거와 범위 규칙을 그대로 검증합니다. 이 계약은 내부 실행 상태이며, Slack 수신자와 전달 사실은 최종 `AnswerResponse.actions`에도 보존합니다.
 
 모델의 evidence ID는 한 응답 안의 임시 참조입니다. 서버가 요청·revision·발화 범위에 속한 ID로 바인딩하고 기존 보류 계약의 근거를 직접 승계합니다. 모델에 기존 근거 ID를 복사하거나 기존 계약을 재작성하도록 요구하지 않습니다. 원문 인용·현재 발화의 변경 권한은 별도로 검증하며, 재검색에서는 모델이 계약을 재출력하지 않아도 고정된 서버 계약을 사용합니다.
 
 `acknowledge`는 단순 금지·취소에 대한 확인이며 새 전달 본문이 아닙니다. 추가 질문이나 본문 생성 없이 확인하고 이전 완료 답변을 보존합니다. 출력 형식은 일반 layout과 줄 수를 타입으로 분리해, `line_count`에는 양의 정수를 요구하고 그 외 형식에는 숫자를 허용하지 않습니다. 저장 파일명은 서버가 자동 생성하므로 파일명·경로 부재를 저장 의사의 미해결로 취급하지 않습니다.
 
 각 task는 독립적인 근거 요구입니다. 같은 `docs` route라도 라이브러리·대상·버전이 다르면 여러 task로 유지하며 검색어를 하나로 합치지 않습니다. task 개수에는 고정 상한을 두지 않으며, task별 검색 결과 수 `k`는 1~10으로 제한합니다. 계약 기준은 `src/core/planner_schema.py`입니다.
+
+`symbols`는 검색 대상을, `aspects`는 원문에 있어야 하는 별도 철자·값을 지정합니다. 알려진 API 호출을 찾는 요청은 정규 API 심볼을 사용하고 검증된 import 별칭도 인정합니다. 관측한 `np.array`의 소속을 묻는 정체 확인은 원문 심볼을 유지하며, NumPy 여부는 `query`·본문 지시에서 판단할 질문으로 남깁니다. 주변 재대입·`match`·`case`는 바인딩 해석 문맥이며 호출 자체의 literal aspect가 아닙니다. 원문 인용 요청만으로 정규 API 철자를 aspect에 복제하지 않습니다. API의 정체성과 정확한 원문 철자를 각각 명시한 요청에는 두 필드를 모두 유지합니다.
 
 | 필드 | 의미 |
 |---|---|
@@ -328,7 +334,11 @@ UI가 만든 고유 staging 파일은 반영 대기와 재시도 입력입니다
 
 UI와 서버 모두 파일 크기를 검사합니다. 서버는 실제 바이트를 기준으로 해시와 크기를 계산하고, 추가·교체 후보를 읽는 중에도 전체 한도를 검사합니다. staging과 서버 원본의 합계 저장 공간은 활성 합계 한도의 3배로 제한하며, 공간을 줄이는 개별 삭제나 전체 해제는 허용합니다. 목록 조회·변경 시 같은 세션 락 안에서 활성 목록이 참조하지 않는 관리 원본을 회수하므로, 이전 세션이나 비정상 종료·삭제 실패로 남은 원본도 다시 정리합니다. 삭제 실패로 이미 확정한 목록과 revision을 되돌리지는 않습니다. 현재 요청의 입력 경로와 활성 원본은 보호하고, staging은 `SESSION_TTL_SECONDS`보다 오래된 미사용 배치만 정리하여 최근 쓰기와 재시도 입력을 보존합니다. 경로 경계를 벗어나는 링크와 알 수 없는 저장 구조는 삭제하지 않습니다. 실제 디스크 사용량을 계속 검사하며 기존 단일 파일 API에도 같은 용량 한도를 적용합니다.
 
-`requirement.match`가 `symbol` 또는 `definition`이면 기존 코드·Notebook source registry에서 AST로 조회합니다. `topic`에 `symbols`가 있으면 vector 검색 결과의 literal anchor로 확인하며 AST 조회로 전환하지 않습니다. Docling/OCR로 읽은 문서는 네이티브 Python 구현의 완전한 수집으로 취급하지 않으며 심볼 부재를 확정하지 않습니다. 함수·클래스·메서드 정의와 호출·사용을 구분하므로, 주석이나 호출에 이름이 있다는 이유로 함수 구현을 발췌하지 않습니다. AST 조회는 vector top-k 밖의 원문도 찾으며, 요구한 정의와 Notebook의 별도 정의 cell을 `k` 때문에 잘라내지 않습니다. import 별칭은 Python의 이름 범위를 따라 해석합니다. 매개변수·지역 바인딩·재대입이 가린 이름을 원래 라이브러리 API로 확대하지 않고, 내부 범위의 이름 가림이 외부 별칭을 삭제하지 않도록 분리합니다.
+`requirement.match`가 `symbol` 또는 `definition`이면 기존 코드·Notebook source registry에서 AST로 조회합니다. `topic`에 `symbols`가 있으면 vector 검색 결과의 literal anchor로 확인하며 AST 조회로 전환하지 않습니다. Docling/OCR로 읽은 문서는 네이티브 Python 구현의 완전한 수집으로 취급하지 않으며 심볼 부재를 확정하지 않습니다. 함수·클래스·메서드 정의와 호출·사용을 구분하므로, 주석이나 호출에 이름이 있다는 이유로 함수 구현을 발췌하지 않습니다. AST 조회는 vector top-k 밖의 원문도 찾으며, 요구한 정의와 Notebook의 별도 정의 cell을 `k` 때문에 잘라내지 않습니다. import 별칭은 Python의 이름 범위를 따라 해석합니다. 매개변수·지역 바인딩·재대입이 가린 이름을 원래 라이브러리 API로 확대하지 않고, 내부 범위의 이름 가림이 외부 별칭을 삭제하지 않도록 분리합니다. 원문 이름의 발견과 정규 API 바인딩의 확정은 별도 결과입니다. `np.array` 같은 사용이 실제로 있지만 import나 제어 흐름 때문에 정규 대상을 확정하지 못하면 후보를 유지하고 `unknown`으로 남깁니다. 합성의 `CODE_API_IDENTITY_POLICY`는 사후에서 코드 원문을 인용하는 `source`·`inference` 산문의 추가 지시로 공유하며, 호출 경로에서 이름·receiver가 해당 API로 바인딩된 근거를 요구합니다. 코드 블록·`excerpt`·구조화 위치·`interaction`의 기존 사실성 검사는 유지합니다. 별칭 관례·속성 철자만으로 귀속을 승인하지 않고 미확정 값의 포획·재대입, 명시적인 조건부 가능성, 실제 API 귀속과 실행 입증을 구분합니다.
+
+AST occurrence의 `context_ranges`는 해당 사용을 해석하는 데 필요한 import·제어 흐름 원문을 연결합니다. `SearchHit.role`은 `candidate`와 `context`를 구분하고 후보의 `supporting_evidence_ids`가 필수 문맥을 지정합니다. Decisions에는 후보의 `source_id`와 `supporting_source_ids`를 함께 제공하며 하나의 관련성 판정 단위로 평가합니다. 같은 task나 파일이라는 이유만으로 다른 원문을 승인하지 않습니다. 선택기는 각 범위에 `max_excerpt_chars`를, 전체 packet에 `max_total_excerpt_chars`·`max_items`를 적용해 후보와 필수 문맥을 전부 포함하거나 해당 후보를 제외합니다. 후보가 제어 흐름 원문에 포함되면 그 원문 범위로 합치며, 여러 후보가 공유하는 import 원문은 예산에서 한 번만 셉니다.
+
+필수 묶음의 동일 snapshot·element 범위 사이는 공백만 있을 때 개별 길이 한도 안에서 실제 공백까지 포함한 `EvidenceRef`로 병합합니다. 앞뒤 경계도 공백만 남아 있으면 한도 안에서 포함하므로 마지막 개행이 빠진 선택을 원문 전체로 복원할 수 있습니다. 코드·주석이 있는 간격과 다른 Notebook cell은 병합하지 않습니다. 개별 길이 한도 때문에 합칠 수 없으면 분리된 범위를 유지하며, 추가한 공백까지 전체 문자 비용으로 계산해 총량이 부족하면 묶음 전체를 제외합니다. 실제 선택이 원문 전체를 포함할 때만 기존 계산에 따라 `is_partial=false`가 되며 별도의 증명 필드나 판정 예외를 두지 않습니다. 예산 부족을 성공으로 바꾸지 않으며 최종 packet 충분성 판정을 유지합니다. 선택된 각 원문은 기존 `EvidenceRef` ID·범위로 인용하고, 첨부 해제 뒤에도 답변의 source registry에 보존합니다.
 
 topic 검색은 Chroma 의미 검색과 `bm25s`의 BM25 검색을 결합하는 `hybrid` 모드를 기본으로 사용합니다. 한국어는 `kiwipiepy`로 분석하고 영문 식별자·숫자도 검색 토큰에 보존합니다. 문서와 질의에 동일한 정책을 적용하며 원문 문자열과 offset은 변경하지 않습니다. `UploadRetriever.search()`는 `SearchHit` 목록을 반환하고 Chroma 메서드는 외부에 노출하지 않습니다. 비교용 `baseline`은 기존 Chroma top-k 후보의 문자열 재정렬을 그대로 유지하며, `bm25`는 어휘 검색만 수행합니다.
 
@@ -372,7 +382,7 @@ flowchart LR
 
 upload 검색은 검증한 indexed 원문 범위를 그대로 전달하며 500자·5줄로 미리 자르지 않습니다. synthesis가 그 범위 안에서 최종 발췌 예산을 적용합니다. 코드 요소의 literal 식별자·aspect는 대소문자를 구별하고, 자연어 요소는 비교할 때만 공백과 대소문자를 완화합니다. literal의 양 끝이 식별자 문자일 때만 해당 쪽 단어 경계를 검사하므로, 기호로 끝나는 코드 조각의 일치 여부가 뒤따르는 공백 하나로 바뀌지 않습니다. 원문 문자열·offset·표 셀 범위는 바꾸지 않습니다. Chroma 반환값은 source registry에서 snapshot·element·선택 범위와 원문을 확인해 `EvidenceRef`로 복원합니다. docs는 외부 Tavily 응답을 검사해 같은 근거 모델을 생성합니다. 내부 도구·executor·재시도는 `RetrievalResult`와 `SearchHit`을 직접 전달하고, ToolMessage·HTTP 출력과 JSON 상태 복원 경계에서 직렬화·검증합니다.
 
-새 검색 근거의 선택 예산은 [`budgets.py`](../src/runtime/nodes/synthesis/budgets.py)에서 결정합니다. graph가 설정을 `ExcerptLimits(normal_chars, compact_chars)`로 사전 검증 노드에 전달하고 `resolve_evidence_budgets()`가 일반·compact 예산을 함께 계산합니다. [`prepared_semantics.py`](../src/runtime/nodes/validation/prepared_semantics.py)는 제한된 후보를 Decisions로 평가한 뒤 [`evidence_selection.py`](../src/runtime/nodes/synthesis/evidence_selection.py)의 선택 함수에 `RetrievedEvidenceBudget(max_excerpt_chars, max_total_excerpt_chars, max_items)`와 승인된 지원 항목을 전달합니다. 후보 배분은 같은 문서의 원시 검색 창을 묶고, 검색 단계의 순위에서 주된 창과 상보 본문에 먼저 기회를 준 뒤 나머지 창을 순환합니다. 짧은 선언의 반복이 설명 본문보다 먼저 후보 상한을 소진하지 않게 하며, 창·요구·전체 후보 상한은 유지합니다. 실제 선택 packet의 충분성을 평가해 저장하며 synthesis의 입력 준비는 이 packet을 재선택·축약하지 않습니다. 일반 packet이 불충분해도 compact packet이 모든 요구와 전체 작성 준비 검사를 통과했다면 검증된 compact를 기본 합성 입력으로 사용합니다. 실패 요구와 재검색 여부도 실제 선택한 packet을 기준으로 계산하며, 통과 기준을 낮추거나 일부 검사만으로 승격하지 않습니다.
+새 검색 근거의 선택 예산은 [`budgets.py`](../src/runtime/nodes/synthesis/budgets.py)에서 결정합니다. graph가 설정을 `ExcerptLimits(normal_chars, compact_chars)`로 사전 검증 노드에 전달하고 `resolve_evidence_budgets()`가 일반·compact 예산을 함께 계산합니다. [`prepared_semantics.py`](../src/runtime/nodes/validation/prepared_semantics.py)는 제한된 후보를 Decisions로 평가한 뒤 [`evidence_selection.py`](../src/runtime/nodes/synthesis/evidence_selection.py)의 선택 함수에 `RetrievedEvidenceBudget(max_excerpt_chars, max_total_excerpt_chars, max_items)`와 승인된 지원 항목을 전달합니다. 후보 배분은 같은 문서의 원시 검색 창을 묶고, 검색 단계의 순위에서 주된 창과 상보 본문에 먼저 기회를 준 뒤 나머지 창을 순환합니다. 짧은 선언의 반복이 설명 본문보다 먼저 후보 상한을 소진하지 않게 하며, 창·요구·전체 후보 상한은 유지합니다. 실제 선택 packet의 충분성을 평가해 저장하며 synthesis의 입력 준비는 이 packet을 재선택·축약하지 않습니다. 일반 packet이 불충분해도 compact packet이 모든 근거 요구 검사를 통과했다면 검증된 compact를 기본 합성 입력으로 사용합니다. 실패 요구와 재검색 여부도 실제 선택한 packet을 기준으로 계산하며, 통과 기준을 낮추거나 일부 검사만으로 승격하지 않습니다.
 
 | 계획의 검색 출처 | 일반 excerpt 합계 상한 | compact excerpt 합계 상한 |
 | --- | ---: | ---: |
@@ -385,11 +395,13 @@ upload 검색은 검증한 indexed 원문 범위를 그대로 전달하며 500�
 
 docs의 후보 준비는 문단·행·선언을 원문 경계로 사용하고 문자 일치는 후보 순서만 돕습니다. 후보의 관련성과 `need:*`·`aspect:*` 지원 label은 Decisions가 판정합니다. 선택기는 승인 후보가 새로 지원하는 항목과 남은 문자·항목 용량을 함께 고려하고 요구별로 기회를 배분합니다. 일반 packet은 승인된 docs 범위의 identity를 유지하며 compact에서 범위를 줄이면 그 실제 범위의 충분성을 별도로 평가합니다. upload의 명시 파일·literal anchor·AST 조회와 표의 완전한 행·헤더 선택은 유지합니다. 코드는 정확한 원문의 일부를 포함할 수 있으므로 offset과 부분 선택 정보를 보존하고 독립 실행 가능성을 보장하지 않습니다.
 
-`retrieval.prepared_evidence`는 요청 ID·revision·계획 fingerprint·이전 답변 hash, 판정 모델·지시문 fingerprint·임계값, 일반 packet과 선택 가능한 compact packet을 보존합니다. 각 packet에는 정확한 `EvidenceRef` 목록, `requirement_map`, 실패 요구 ID와 fingerprint가 있습니다. 충분성 또는 준비 판정을 통과하지 못한 compact packet은 저장하지 않아 timeout 복구에 사용되지 않습니다. 사후 검증은 실제 사용 packet에서 본문이 유효하게 인용한 범위만 요구별 Decisions 입력으로 사용합니다. 검색에 있었지만 모델에 보내지 않았거나 본문이 인용하지 않은 근거로 부족을 채우지 않습니다.
+`retrieval.prepared_evidence`는 요청 ID·revision·계획 fingerprint·이전 답변 hash, 판정 모델·지시문 fingerprint·임계값, 일반 packet과 선택 가능한 compact packet을 보존합니다. 각 packet에는 정확한 `EvidenceRef` 목록, `requirement_map`, 실패 요구 ID와 fingerprint가 있습니다. 근거 요구별 충분성 판정을 통과하지 못한 compact packet은 저장하지 않아 timeout 복구에 사용되지 않습니다. 사후 검증은 실제 사용 packet에서 본문이 유효하게 인용한 범위만 요구별 Decisions 입력으로 사용합니다. 검색에 있었지만 모델에 보내지 않았거나 본문이 인용하지 않은 근거로 부족을 채우지 않습니다.
 
 문자 수는 새 검색에서 선택한 `excerpt` 문자열의 Python `len()` 기준입니다. 바이트·모델 토큰·화면상 글자 묶음 수가 아니며 system prompt·대화·JSON 메타데이터·별도 표 셀의 직렬화 비용을 포함하지 않습니다. 기존 답변 변환에 필요한 전체 원문 본문과 검증된 인용은 별도 필수 입력이므로 이 검색 예산으로 축약하지 않습니다. 따라서 최종 packet 전체와 prompt 전체에 같은 문자 상한이 적용되는 것은 아니며 모델 context 한도를 보장하지도 않습니다. 현재 수치는 경험적 초기값이고 최적성을 확인한 온라인 평가 근거는 없습니다. 수치 변경에는 요구별 근거 범위·답변 품질·인용과 정상·compact 지연, 입력·출력 토큰·비용의 비교 평가가 필요합니다. 전체 입력 token 제한은 이런 관측으로 필요를 확인한 뒤 별도로 설계합니다.
 
-모델 합성에서는 사전에 준비한 실제 범위만 evidence packet에 남기며 범위가 달라지면 새 evidence ID를 사용합니다. 이전 답변 복사는 모델 호출 없이 선택한 답변의 citations를 검증 packet으로 사용합니다. `ResponseState.evidence_requirement_map`은 실제 packet ID와 requirement ID를 연결합니다. 모델 입출력에서만 `e1`, `e2` 같은 짧은 별칭을 사용하고 서버가 원래 ID로 복원해 검증합니다. 일반·compact는 각자의 매핑을 사용하며 알 수 없는 별칭은 통과하지 못합니다. 프롬프트에는 선택 범위의 `is_partial`·`capture_scope`와 요구별 연결 상태를 전달합니다. 이 연결 정보는 검색 유래를 나타내며 의미적 충분성은 저장된 사전 판정과 실제 인용의 사후 판정으로 확인합니다.
+모델 합성에서는 사전에 준비한 실제 범위만 evidence packet에 남기며 범위가 달라지면 새 evidence ID를 사용합니다. 이전 답변 복사는 모델 호출 없이 선택한 답변의 citations를 검증 packet으로 사용합니다. `ResponseState.evidence_requirement_map`은 실제 packet ID와 requirement ID를 연결합니다. 합성 모델의 입출력에서는 `e1`, `e2` 같은 짧은 별칭을 사용하고 서버가 원래 ID로 복원해 검증합니다. 일반·compact는 각자의 매핑을 사용하며 알 수 없는 별칭은 통과하지 못합니다. 프롬프트에는 선택 범위의 `is_partial`·`capture_scope`와 요구별 연결 상태를 전달합니다. 이 연결 정보는 검색 유래를 나타내며 의미적 충분성은 저장된 사전 판정과 실제 인용의 사후 판정으로 확인합니다.
+
+사후 검증은 미인용 원문을 포함한 현재 검증 packet 순서와 이전 답변에만 있는 인용 순서로 단일 별칭 map을 만들어 각 내용 단위·본문·작업 판정 입력에 함께 적용합니다. 합성과 공유하는 typed 투영 함수가 내용 단위의 `refs`·`source_location.ref`, 출처 ID·registry key, available·cited ID만 복사본에서 바꾸며 본문 문자열·원문·URI·file ID·좌표·hash와 도메인·캐시 ID는 유지합니다. 실패 초안의 현재 packet 밖 참조를 `unavailable:`로 표시하는 처리도 같은 투영 함수의 `mark_unavailable` 옵션을 사용합니다. 요구별 충분성은 사전·사후 모두 원래 `EvidenceRef` ID와 같은 registry·encoder를 사용하며, 별도 호출인 내용 단위·본문의 별칭 입력과 결합하지 않습니다. 같은 task와 같은 배정 원문 범위는 동일한 요구 판정 입력을 만들고, 실제 인용 범위가 좁아지면 그 범위로 다시 판정합니다. 도메인·캐시 ID도 원래 값을 유지합니다.
 
 합성의 `[Reference Policy]`에는 최종 검증과 동일한 `retrieval_required`를 전달합니다. `source`·`inference`·`excerpt`에는 항상 유효한 refs가 필요하며 검색이 필요한 답변의 `example`에도 필요합니다. 이전 검색 답변의 변환은 이 조건을 상속합니다. `excerpt` 검증은 하나의 선택 범위 전체와 공백·줄바꿈까지 일치할 때만 `exact_match`입니다. 일부 인용이나 재서술은 `source`로 표시하며 의미적 근거성은 별도 평가 대상입니다.
 
@@ -456,7 +468,7 @@ graph 실행, debug 수집, response assembly, projection 또는 budget 검사�
 
 세션은 전달 가능한 `answer`와 화면에 제공한 부분 답변을 `previous_response`로 별도 보존합니다. 답변 없는 실패·거절·보충 질문은 이 원본을 교체하지 않습니다. 내부 `ResponseState.kind`는 `draft`, `answer`, `clarification`, `failure`를 구분하며, 부분 답변을 보존했다는 이유만으로 원래 미완료 요청의 저장·전송을 허용하지 않습니다. 사용자가 새로 “이 답변을 그대로 저장해줘”라고 요청하면 기존 본문·원문 인용·한계를 고정한 복사 대상으로 사용할 수 있습니다. “세 줄로 줄여 저장해줘”는 같은 원본을 수정하고 새 요청에 맞게 검증한 본문을 저장합니다. 실행 receipt는 본문에 덧붙이지 않고 `actions`에서 관리합니다.
 
-`PendingRequest`은 정보가 부족한 `awaiting_input`, 생성이 필요한 `awaiting_body`, 목적지가 필요한 `awaiting_destination`, 전달 실패 후 재개를 기다리는 `awaiting_delivery`를 구분합니다. 본문이 없어도 확정된 요구를 보존하고, `body_prepared`가 변환할 원본과 검증을 마친 결과를 구분합니다. 완성된 뒤에는 원문 인용·계약·이미 성공한 행동을 함께 보존합니다. Slack 목적지가 없으면 본문 준비를 진행하고 목적지 질문을 실행 receipt에 표시합니다. 저장 성공 후 Slack이 실패하면 준비된 본문과 저장 완료 상태를 보존하며 다음 보충에서 저장을 반복하지 않습니다. 보충 질문·실패 안내가 원본을 덮지 않고, 잘못된 보류 요청 ID도 기존 원본을 교체하지 않습니다. 후속 금지·불명확함·본문 수정은 과거 전송 의사로 덮어쓰지 않습니다. 새 발화의 보충·정정만 명시적인 revision을 만들며 재검색·재합성은 같은 계약을 유지합니다. 검증된 `ResponseState`의 요청 ID·revision이 현재 계약과 일치해야 실행할 수 있습니다. graph에는 이전·보류 본문의 깊은 복사본을 전달해 실패한 실행의 변경이 세션 원본을 오염시키지 않게 합니다.
+`PendingRequest`는 정보가 부족한 `awaiting_input`, 생성이 필요한 `awaiting_body`, 목적지가 필요한 `awaiting_destination`, 전달 실패 후 재개를 기다리는 `awaiting_delivery`를 구분합니다. 본문이 없어도 확정된 요구를 보존하고, `body_prepared`가 변환할 원본과 검증을 마친 결과를 구분합니다. 완성된 뒤에는 원문 인용·계약·이미 성공한 행동을 함께 보존합니다. Slack 목적지가 없으면 본문 준비를 진행하고 목적지 질문을 실행 receipt에 표시합니다. 저장 성공 후 Slack이 실패하면 준비된 본문과 저장 완료 상태를 보존하며 다음 보충에서 저장을 반복하지 않습니다. 보충 질문·실패 안내가 원본을 덮지 않고, 잘못된 보류 요청 ID도 기존 원본을 교체하지 않습니다. 후속 금지·불명확함·본문 수정은 과거 전송 의사로 덮어쓰지 않습니다. 새 발화의 보충·정정만 명시적인 revision을 만들며 재검색·재합성은 같은 계약을 유지합니다. 검증된 `ResponseState`의 요청 ID·revision이 현재 계약과 일치해야 실행할 수 있습니다. graph에는 이전·보류 본문의 깊은 복사본을 전달해 실패한 실행의 변경이 세션 원본을 오염시키지 않게 합니다.
 
 ### 4.3 수명주기와 한계
 
@@ -467,7 +479,7 @@ graph 실행, debug 수집, response assembly, projection 또는 budget 검사�
 - 현재 서버 store는 in-memory이므로 process restart와 multi-worker 사이에서 서버의 대화 문맥·활성 첨부·답변 저장 상태를 복원하지 않습니다.
 - React는 같은 탭의 `sessionStorage`에 버전이 있는 표시용 snapshot을 보관합니다. 대화 목록과 현재 선택, 답변·당시 출처·저장 결과, 공백·개행을 포함한 작성 초안, 보류 질문, Slack 입력 초안과 마지막 확정 첨부 목록을 새로고침 후 복원합니다. 유효한 브라우저 snapshot이 있으면 기존 session ID로 클라이언트를 다시 만들고, 복원할 수 있는 기록이 없으면 새 대화를 시작합니다. 새 채팅은 별도 session ID를 발급하므로 이전 대화도 목록에서 다시 선택할 수 있습니다. React 개발 주소와 정적 제공 주소는 origin이 달라 기록이 자동으로 이전되지 않습니다.
 - 새로고침 복원·응답 수신 중이 아닌 대화로 복귀·새 요청 실행 전에는 서버 manifest를 재확인합니다. 기존 epoch와 같으면 활성 첨부를 다시 올리지 않고 후속 질문과 기존 답변 저장을 계속할 수 있습니다. epoch가 다르면 기록·당시 출처·초안·마지막 첨부 목록은 읽기 전용으로 유지하고 질문·저장·전송·첨부 변경을 차단합니다. 연결 실패는 만료로 확정하지 않고 재확인을 제공합니다. 새 채팅에서 필요한 파일을 다시 첨부해 계속할 수 있습니다.
-- 표시 기록의 보존은 서버 TTL/LRU나 첨부·생성 파일의 수명을 연장하지 않습니다. 새로고침과 대화 전환은 질문·첨부 변경·파일 저장·Slack 전송을 자동 재실행하지 않습니다. 질문의 응답 수신 중에도 초안 작성과 대화 전환을 허용하며, 해당 대화의 추가 전송·첨부 변경·TXT 저장만 막습니다. 첨부 준비와 TXT 저장 중에는 대화 전환을 막습니다. 새로고침 시 제출 전 네이티브 파일 선택과 실행 대기 명령은 복원하지 않습니다. 선택만 한 파일은 다시 선택해야 합니다. 탭을 닫은 뒤의 복원은 보장하지 않으며 다른 기기와의 동기화는 제공하지 않습니다. 브라우저 저장 실패나 잘못된 snapshot은 화면에 안내합니다.
+- 표시 기록의 보존은 서버 TTL/LRU나 첨부·생성 파일의 수명을 연장하지 않습니다. 새로고침과 대화 전환은 질문·첨부 변경·파일 저장·Slack 전송을 자동 재실행하지 않습니다. 질문의 응답 수신 중에도 초안 작성과 대화 전환을 허용하며, 해당 대화의 추가 전송·첨부 변경·TXT 저장만 막습니다. 첨부 준비와 TXT 저장 중에는 대화 전환을 막습니다. 새로고침 시 제출 전 네이티브 파일 선택과 실행 대기 명령은 복원하지 않습니다. 선택만 한 파일은 다시 선택해야 합니다. 탭을 닫은 뒤의 복원은 보장하지 않으며 다른 기기와의 동기화는 제공하지 않습니다. 브라우저 저장 실패나 잘못된 snapshot은 화면에 안내합니다. 입력 저장은 250ms 동안 합치고 질문·첨부 실행 전과 `pagehide`·숨김·unmount에서 즉시 확정합니다. 대화 삭제는 확인 후 탭 기록과 미참조 원문을 제거하고 즉시 저장하며, 진행 중인 대화와 첨부·저장 작업 중에는 삭제를 막습니다. 이후 저장이 성공하면 용량 경고를 해제합니다.
 - planner/synthesis에는 summary를 비신뢰 과거 데이터로 전달하며, summary 안의 명령을 따르거나 retrieved evidence로 취급하지 않습니다.
 - planner는 최근 턴 제한 안에서 최신 사용자 질문까지의 Human/AI 메시지를 순서대로 전달합니다. 별도의 `user_turn_ledger`에는 발화 ID와 정확한 원문을 보존하고 `[User Turn IDs]` 지시로 현재 발화 ID를 지정합니다. 이전 답변의 aspect 선택에는 실제 표시 텍스트를, previous·pending 원본 선택에는 원래 답변 문서와 export metadata를 제공합니다. 이 문맥들의 중복은 후속 요청 해석과 정확한 원문 바인딩을 위해 유지합니다. 질문 표현으로 문맥을 생략하지 않으며, 도구 호출 중간 메시지와 현재 질문 뒤에 붙은 재시도 답변은 제외합니다.
 - 앞선 대화는 후속 질문의 지시 대상과 이어지는 출처 제한을 해석하는 데 사용합니다. 현재 질문의 명시적인 출처 변경이 우선하며, 관계없는 새 작업에는 이전 검색 요구를 적용하지 않습니다.
@@ -528,11 +540,11 @@ SSE의 `event:`는 아래 이벤트 이름이며, `data:`는 해당 이벤트의
 
 | 이벤트 | 의미 |
 |---|---|
-| `request_started` | 이번 HTTP 실행 시작과 실행 ID인 `request_id` |
+| `request_started` | 이번 HTTP 실행 시작과 실행 ID인 `execution_id` |
 | `stage_started`, `stage_completed` | graph 단계의 시작·완료 정보 |
-| `heartbeat` | HTTP 실행 ID인 `request_id`와 요청 시작 후 `elapsed_ms`를 담는 연결 유지 신호 |
+| `heartbeat` | HTTP 실행 ID인 `execution_id`와 요청 시작 후 `elapsed_ms`를 담는 연결 유지 신호 |
 | `progress_snapshot` | 현재 단계와 근거 수 등 진행 상황 |
-| `final_response` | `status`, `response`, 선택적 `answer_id`, `message`, `problem`, `request_id`, `trace`, `debug`, `upload_manifest`를 담은 최종 결과 |
+| `final_response` | `status`, `response`, 선택적 `answer_id`, `message`, `problem`, `execution_id`, `trace`, `debug`, `upload_manifest`를 담은 최종 결과 |
 | `error` | 실행 중 오류 정보. 이후 `final_response`가 올 수도 있음 |
 | `done` | 이벤트 전송 종료. 요청 성공을 뜻하지 않음 |
 
@@ -605,21 +617,21 @@ benchmark의 Python 클라이언트는 `path` 기반 sync를 사용합니다. �
 
 `POST /sessions/{session_id}/answers/{answer_id}/save`는 요청 본문 없이 서버에 보관된 해당 답변을 저장합니다. 임의의 본문을 업로드하는 API가 아니며 planner·검색·synthesis·Slack 전송을 실행하지 않습니다. `answer_id`는 최종 답변에 선택적으로 제공되며 세션별로 최근 200개 snapshot을 보관합니다. snapshot은 원래 본문·출처·검사·제한을 유지하고 실행 receipt는 제외합니다. 등록·조회 시 깊은 복사로 호출자의 변경과 격리합니다.
 
-성공과 저장 실패는 `{status, answer_id, request_id, response, message}`로 반환하며 `status`는 `completed` 또는 `failed`입니다. `response.actions`에는 이번 저장의 receipt가 있고 본문은 같은 snapshot입니다. 같은 답변의 중복 요청·실패 후 재시도는 현재 export 세대의 operation과 bytes를 사용합니다. 저장 key는 본문·원문 근거·검사·제한을 보존하고 의미 검증 보고서만 제외합니다. 같은 저장 대상은 검증 확률·모델·추가 조건 검사가 달라도 operation을 공유하므로 직접 재시도·자연어 반복 사이에 별도 파일로 갈라지지 않습니다. 답변 ID와 표시 snapshot은 당시 의미 검증 보고서를 그대로 보존합니다. 검증된 artifact 만료 뒤 명시적으로 다시 저장하면 새 세대를 선택하고 이전 artifact의 기한과 tombstone은 유지합니다. 이미 준비된 보류 저장과 저장 key가 일치하면 그 저장만 완료 처리하고 남은 Slack 전송은 유지합니다. 본문이 미완료인 원래 요청은 사용자가 표시된 부분 답변을 별도로 저장했다고 완료로 바꾸지 않습니다.
+성공과 저장 실패는 `{status, answer_id, execution_id, receipt, message}`로 반환하며 `status`는 `completed` 또는 `failed`입니다. `receipt`는 이번 저장의 행동 결과이며 답변 본문과 원문은 다시 반환하지 않습니다. 화면은 선택한 답변과 이 영수증을 함께 표시합니다. 같은 답변의 중복 요청·실패 후 재시도는 현재 export 세대의 operation과 bytes를 사용합니다. 저장 key는 본문·원문 근거·검사·제한을 보존하고 의미 검증 보고서만 제외합니다. 같은 저장 대상은 검증 확률·모델·추가 조건 검사가 달라도 operation을 공유하므로 직접 재시도·자연어 반복 사이에 별도 파일로 갈라지지 않습니다. 답변 ID와 표시 snapshot은 당시 의미 검증 보고서를 그대로 보존합니다. 검증된 artifact 만료 뒤 명시적으로 다시 저장하면 새 세대를 선택하고 이전 artifact의 기한과 tombstone은 유지합니다. 이미 준비된 보류 저장과 저장 key가 일치하면 그 저장만 완료 처리하고 남은 Slack 전송은 유지합니다. 본문이 미완료인 원래 요청은 사용자가 표시된 부분 답변을 별도로 저장했다고 완료로 바꾸지 않습니다.
 
 이 API는 기존 세션을 잠그며 누락·만료 세션을 새로 만들지 않습니다. 없는 세션·답변은 `404`, 조회 시 확인한 TTL 만료는 `410`이며 오류 본문의 `detail`에 `code`, `message`를 제공합니다. 서버 기록이 없을 때 화면 답변을 재생성하거나 대신 전송하지 않습니다. 이미 만들어진 파일의 다운로드는 별도 artifact 기한을 따릅니다.
 
 ### 5.2 최종 응답과 debug
 
-`final_response` 이벤트의 `data`는 `AgentResponse`입니다. `status`, `response`, `message`, `problem`, `request_id`, `missing_slots`와 전송 진단용 `trace`, `debug`, `upload_manifest`를 담습니다.
+`final_response` 이벤트의 `data`는 `AgentResponse`입니다. `status`, `response`, `answer_id`, `message`, `problem`, `execution_id`, `missing_slots`와 전송 진단용 `trace`, `debug`, `upload_manifest`를 담습니다.
 
-공개 필드 이름 `request_id`는 유지하지만, 필드가 속한 모델에 따라 식별 대상과 수명이 다릅니다.
+실행 ID와 요청 계약 ID는 이름과 수명을 구분합니다. `X-Execution-ID` 응답 헤더, SSE 이벤트와 최종 결과는 같은 전체 실행 UUID를 사용합니다.
 
 | 위치 | 식별 대상과 수명 |
 |---|---|
-| `TurnResult.request_id`, 최종 응답의 `request_id` | 한 번의 HTTP 실행. 보충·정정·저장 재시도도 새 실행 ID를 받음 |
-| `ToolExecutionEvidence.request_id` | 도구 실행 기록을 수집한 한 번의 실행. 같은 턴 결과의 실행 ID와 대조 |
-| `request_map.jsonl`의 `request_id` | benchmark 최종 평가 질문의 실행 ID. 준비 턴의 실행 ID는 `scenario_turns`에서 확인 |
+| `TurnResult.execution_id`, 최종 응답의 `execution_id` | 한 번의 HTTP 실행. 보충·정정·저장 재시도도 새 실행 ID를 받음 |
+| `ToolExecutionEvidence.execution_id` | 도구 실행 기록을 수집한 한 번의 실행. 같은 턴 결과의 실행 ID와 대조 |
+| `request_map.jsonl`의 `execution_id` | benchmark 최종 평가 질문의 실행 ID. 준비 턴의 실행 ID는 `scenario_turns`에서 확인 |
 | `RequestContract.request_id` | 사용자의 요청을 이어가는 요청 계약 ID. 보충·정정은 ID를 유지하고 revision을 올리며, 별개의 새 요청은 새 ID를 받음 |
 | `AnswerProvenance.request_id` | 해당 답변을 확정한 요청 계약 ID. HTTP 실행 기록의 ID와 직접 비교하지 않음 |
 | `SaveOperation.request_id` | 저장 의무를 소유한 요청 ID. 같은 본문의 저장 재시도는 동결된 operation과 ID를 유지 |
@@ -646,9 +658,10 @@ benchmark의 Python 클라이언트는 `path` 기반 sync를 사용합니다. �
   "response": null,
   "message": "확인할 파일을 업로드해 주세요.",
   "problem": null,
-  "request_id": "abc12345",
-  "missing_slots": ["upload_files"],
-  "trace": "Session ID: demo-session, Request ID: abc12345",
+  "answer_id": null,
+  "execution_id": "6f367af8-72ed-40e5-a5d8-d79a97d571c4",
+  "missing_slots": ["upload"],
+  "trace": "Session ID: demo-session, Execution ID: 6f367af8-72ed-40e5-a5d8-d79a97d571c4",
   "debug": null,
   "upload_manifest": {"epoch": "session-epoch", "revision": 0, "files": []}
 }
@@ -665,29 +678,33 @@ benchmark의 Python 클라이언트는 `path` 기반 sync를 사용합니다. �
     "code": "internal_error",
     "stage": "request",
     "message": "요청을 완료하지 못했습니다.",
-    "next_action": "none"
+    "next_action": "none",
+    "retry_after_seconds": null
   },
-  "request_id": "abc12345",
+  "answer_id": null,
+  "execution_id": "6f367af8-72ed-40e5-a5d8-d79a97d571c4",
   "missing_slots": [],
-  "trace": "Request ID: abc12345",
+  "trace": "Execution ID: 6f367af8-72ed-40e5-a5d8-d79a97d571c4",
   "debug": null,
   "upload_manifest": null
 }
 ```
 
-`completed`·`partial`의 `response`는 `AnswerResponse`입니다. LLM 출력은 `content`에 해당하는 `AnswerDocument` 하나이며, 나머지는 서버가 생성합니다.
+`completed`·`partial`의 전송 `response`는 `SourcedAnswerPayload`입니다. 서버 내부에서는 `AnswerResponse`를 사용하며 전송 경계에서 원문을 중복 없이 구성합니다. LLM 출력은 `content`에 해당하는 `AnswerDocument` 하나이며, 나머지는 서버가 생성합니다.
 
 - `blocks`: `paragraph`, `heading`, `list`, `code`, `table`. 문장·제목·목록 항목·코드·표 헤더와 셀의 `ContentUnit`은 모두 동일한 검증 순회 대상입니다.
 - `basis`: `source`, `inference`, `example`, `interaction`, `excerpt`. 모델의 표현 분류이며 정확성 판정이 아닙니다.
-- `refs`: 최종 생성·검증 packet의 근거 ID. 서버가 최초 등장 순서대로 `citations.number`를 붙이고 사용한 `EvidenceRef`만 응답에 포함합니다.
+- `refs`: 최종 생성·검증 packet의 근거 ID. 서버가 최초 등장 순서대로 `citations.number`를 붙입니다.
+- `sources`: 원문을 보관하는 registry. 각 `source_id`에 문서 수집본 `snapshot`과 전체 문서 요소 `element`를 한 번 담습니다.
+- `citations`: `number`, `evidence_id`, `source_id`, `selection`. 같은 원문의 서로 다른 인용은 `source_id`를 공유하고 선택 범위만 구분합니다.
 - `checks`: 내용 위치 ID에 대응하는 결정적 참조·발췌 검사. 일반 설명·해석은 이 검사에서 `not_evaluated`이며, `excerpt`는 단일 원문 발췌와 정확히 일치할 때만 `exact_match`입니다. 의미 검증 결과는 별도 `semantic_validation`에 있습니다.
-- `semantic_validation`: Decisions API의 사후 판정. `model`, `threshold`, `checks`의 `name`·`unit_id`·`status`·`probability`와 검사 대상의 `content_hash`·`evidence_fingerprint`를 보존합니다. `grounded`는 각 내용 단위의 근거성, `request_fulfilled`는 답변 전체의 요청 충족 여부, `requirement:<requirement_id>`는 본문이 유효하게 인용한 실제 범위의 요구별 충분성입니다. 정상 판정은 `status="evaluated"`와 확률을, 개별 refusal은 `status="refused"`, `probability=null`을 기록합니다. 모든 항목이 정상 판정이고 확률이 임계값 이상일 때 통과하며, 판정이 없는 안내·실패 응답의 보고서는 `null`입니다. 이는 모델의 확률적 판단이며 사실의 정확성을 보증하는 점수가 아닙니다.
+- `semantic_validation`: Decisions API의 사후 판정. `model`, `threshold`, `checks`의 `name`·`unit_id`·`status`·`probability`와 검사 대상의 `content_hash`·`evidence_fingerprint`를 보존합니다. `grounded`는 각 내용 단위의 근거성, `request_fulfilled`는 일반 요청의 답변 충족 여부(검색 없는 검증된 복사에서는 생략하며 문장 주제 범위가 있으면 그 의미만 판정), `requirement_target_identified:<requirement_id>`는 실제 인용 범위의 대상 식별, `requirement_target_analysis_supported:<requirement_id>`는 그 대상에 대한 분석 근거입니다. 두 모델 판정의 확률·거절을 각각 기록하며 최소값 같은 합성 확률을 만들지 않습니다. 정상 판정은 `status="evaluated"`와 확률을, 개별 refusal은 `status="refused"`, `probability=null`을 기록합니다. 모든 항목이 정상 판정이고 확률이 임계값 이상일 때 통과하며, 독립 의미 조건이 없는 입력 복사와 판정이 없는 안내·실패 응답의 보고서는 `null`입니다. 이전 답변의 단순 복사는 원본의 의미 보고서와 한계를 보존합니다. 이는 모델의 확률적 판단이며 사실의 정확성을 보증하는 점수가 아닙니다.
 - `issues`: 생성 실패·불완전한 답변 등 실제 제한. 전체 confidence 수치는 제공하지 않습니다.
 - `content_hash`: 본문 구조·basis·refs를 포함한 revision. 내용이 바뀌면 검사를 다시 수행해야 합니다. citation의 존재 여부, `issues`, `retrieval_required`, `actions`까지 포함한 전체 응답 digest는 아닙니다.
 - `retrieval_required`: 이 응답을 다시 검사할 때 유지할 출처 요구 조건. 검색 기반 응답의 생성 예시에도 참조가 필요한지 판단하는 데 사용합니다.
 - `actions`: 실제 저장·전송 결과의 `kind`, `status`, `message`·`error`, `error_code`. Slack은 위의 `slack` 계약으로 의도·선택·조회·전달 결과를 보존합니다. `save_text`는 `file_path`, `operation`, `artifact`, `verification`을 전달합니다. `status`는 `success`, `error`, `skipped`, `unknown`이며, 저장·전송 결과를 확인하지 못한 `unknown`은 성공이 아닙니다. `verification=verified`에는 요청·산출물 identity와 실제 bytes 확인이 필요합니다. 이전 Slack 문자열 결과와 `target` 필드는 사용하지 않습니다.
 
-예를 들어 `citations[0].evidence`에는 `snapshot`의 source URI·내용 hash·parser revision, `element`의 원문과 anchors, `selection`이 함께 있습니다. 클라이언트는 현재 업로드 파일을 다시 읽어 인용을 해석하지 않습니다. 모델이 생성한 별도 답변 문자열이나 주장 목록을 클라이언트에서 재조합하지도 않습니다.
+예를 들어 `sources[citations[0].source_id]`에는 `snapshot`의 source URI·내용 hash·parser revision과 `element`의 원문·anchors가 있고, 인용의 `selection`이 사용한 범위를 지정합니다. Python 수신 경계에서는 source ID와 내용 hash, 인용 대상과 선택 범위를 검증합니다. 브라우저는 생성 스키마와 인용 대상의 존재를 검사합니다. 클라이언트는 현재 업로드 파일을 다시 읽어 인용을 해석하지 않습니다. 모델이 생성한 별도 답변 문자열이나 주장 목록을 클라이언트에서 재조합하지도 않습니다.
 
 `debug`에는 아래 정보가 포함될 수 있습니다.
 
@@ -751,13 +768,15 @@ post-synthesis 검사에서 참조·내용·requirement coverage 문제가 있�
 
 새 응답 factory 안에서는 표시 문서와 검증한 근거에서 checks·citations·본문 hash를 한 번 계산합니다. 상태 복원·nested 모델·최종 export의 검증은 일관성 확인을 위해 checks·citations를 다시 계산합니다. post-synthesis 검사는 기록된 revision을 확인하고, 같은 문서·근거를 새 hash로 다시 확정하지 않습니다. 본문 필터링 또는 실제 근거 packet 변경 후에는 다시 확정합니다. mutable 근거의 원문 identity·범위·동일 ID 충돌 검사와 최종 export의 revision 검증은 유지합니다. `inline` 표시 방식은 본문 hash에 포함되므로 표시 방식이 다른 코드를 같은 원본 revision으로 취급하지 않습니다.
 
-Decisions 사전 검증은 후보 판정과 실제 packet 판정으로 진행합니다. [`prepare_evidence_candidates()`](../src/runtime/nodes/synthesis/evidence_selection.py)가 제한된 원문 구간을 만들며, 현재 판정 입력과 정확히 일치하는 캐시에서 이미 실패·거절된 범위는 출처별·요구별·전체 후보 한도를 적용하기 전에 제외합니다. 원본 관측과 거절 판정은 보존하므로 새 범위나 변경된 요구·모델·지시문·임계값은 다시 확인할 수 있습니다. `retrieval.evidence_verdicts`에는 requirement·evidence ID, `passed`·`failed`·`refused`, 확률과 fingerprint, 모델·지시문 fingerprint, `supported_labels`가 남습니다. refusal의 확률은 `null`이며 관련성을 통과한 후보만 packet 선택에 사용합니다. 원문 하나가 요구 전체를 충족할 필요는 없고 서로 보완하는 승인 후보를 함께 사용할 수 있습니다.
+Decisions 사전 검증은 후보 판정과 실제 packet 판정으로 진행합니다. 후보 관련성·지원 항목·요구 충분성과 사후 요구 충분성은 공통 `scoped_evidence_instructions()`로 정책과 해당 rubric을 `questions.instructions`에 직접 넣습니다. `input`에는 이름이 지정된 `evidence` 또는 `requirements`와 `sources`·`tasks`만 제공하며, 사용자 문자열은 `target_path`가 가리키는 데이터에 남깁니다. 공유 데이터 항목은 `evidence_0`·`requirement_0` 같은 중립 이름을 사용하며, 판정 기준이나 일부 질문의 캐시 적중에 따라 이름을 바꾸지 않습니다. 질문 이름은 대상 식별·분석 지원 등의 기준을 별도로 구분합니다. [`prepare_evidence_candidates()`](../src/runtime/nodes/synthesis/evidence_selection.py)가 제한된 원문 구간을 만들며, 현재 판정 입력과 정확히 일치하는 캐시에서 이미 실패·거절된 범위는 출처별·요구별·전체 후보 한도를 적용하기 전에 제외합니다. 원본 관측과 거절 판정은 보존하므로 새 범위나 변경된 요구·모델·지시문·임계값은 다시 확인할 수 있습니다. `retrieval.evidence_verdicts`에는 requirement·evidence ID, `passed`·`failed`·`refused`, 확률과 fingerprint, 모델·지시문 fingerprint, `supported_labels`가 남습니다. refusal의 확률은 `null`이며 관련성을 통과한 후보만 packet 선택에 사용합니다. 원문 하나가 요구 전체를 충족할 필요는 없고 서로 보완하는 승인 후보를 함께 사용할 수 있습니다.
 
-후보 판정은 준비 회차마다 최대 두 batch 안에서 캐시에 없는 서로 다른 질문만 비용으로 계산합니다. 요구와 업로드 파일별 기회를 배분하며 관련성을 먼저 확인하고, 남는 질문 예산으로 정보 종류·aspect 지원을 확인합니다. 예산 때문에 생략한 지원 질문은 실패나 refusal로 기록하지 않으며 최종 packet 충분성 판정은 생략하지 않습니다. 현재 일반·compact packet 검증과 한 번의 재검색 후 최소 검증 호출을 먼저 예약하고, 실제 HTTP 재시도도 이 예약을 침범하지 않습니다. 첫 회차의 일시 오류로 호출을 더 사용하면 다음 회차의 후보 질문 예산이 줄어들며 전체 6회 상한은 유지합니다.
+후보 판정은 준비 회차마다 최대 두 batch 안에서 캐시에 없는 서로 다른 질문만 비용으로 계산합니다. 요구와 업로드 파일별 기회를 배분하며 관련성을 먼저 확인하고, 남는 질문 예산으로 정보 종류·aspect 지원을 확인합니다. 예산 때문에 생략한 지원 질문은 실패나 refusal로 기록하지 않으며 최종 packet 충분성 판정은 생략하지 않습니다. 현재 일반·compact packet 검증과 한 번의 재검색 후 최소 검증 호출을 먼저 예약하고, 실제 HTTP 재시도도 이 예약을 침범하지 않습니다. 요구 수가 R이면 일반·compact 두 종류에 각 두 기준을 적용하는 4R개 질문을 예약하며, 실제 동일 질문의 캐시 재사용은 유지합니다. 첫 회차의 일시 오류로 호출을 더 사용하면 다음 회차의 후보 질문 예산이 줄어들며 전체 6회 상한은 유지합니다.
 
-두 번째 단계는 승인 후보로 일반·compact packet을 선택한 뒤 각각의 `requirement_*`와 `request_ready`를 한 batch로 평가합니다. 동일한 질문 입력은 재사용하므로 두 packet이 같으면 중복 판정을 보내지 않습니다. 결과는 `retrieval.prepared_evidence`에 저장하고 synthesis는 같은 packet을 소비합니다. 일반 packet의 부족한 요구만 재검색 복구 대상이며 compact의 실패는 해당 fallback을 비활성화합니다. `request_ready`가 명시적으로 거절되면 근거 부족을 동반해도 `model_refusal`로 재검색과 합성을 중단합니다. 그 밖의 복구 가능한 docs·upload 주제 검색은 초기 한 번과 재계획 한 번, 요구당 최대 두 번입니다. upload의 symbol·definition 조회, retriever 부재와 지원하지 않는 source 제약은 쿼리 변경으로 해결하지 않습니다.
+두 번째 단계는 승인 후보로 일반·compact packet을 선택한 뒤 각 요구의 `target_identified`와 `target_analysis_supported`를 평가합니다. 첫 판정은 요청한 대상·범위를 식별할 수 있는지를, 두 번째는 그 대상임을 가정했을 때 요청한 분석을 뒷받침할 근거가 있는지를 확인합니다. 실제 질문 이름은 `requirement_<index>_<criterion>`, compact는 `compact_requirement_<index>_<criterion>`입니다. 각 판정이 거절 없이 임계값 0.8 이상이어야 그 요구가 통과하며, 하나의 합성 확률로 대체하지 않습니다. 일반 변수·함수 조회는 선택된 일치 선언·대입·문맥으로 식별할 수 있으며 전체 파일의 완전성을 요구하지 않습니다. 첫 번째·마지막·전체 같은 순서·완전성 조건은 실제 요청한 경우에만 검사하고, 그 범위에 필요한 원문 누락은 식별 실패입니다. 식별된 대상의 코드상 바인딩 불확실성 자체는 근거 있는 답이 될 수 있지만 누락 문맥이나 실제 실행 증거를 대신하지는 못합니다. 로컬 근거 범위·커버리지 검사와 요구별 의미 판정을 통과해 `failed_requirement_ids`가 비어 있는 packet을 사용합니다. 일반 packet이 부족하고 compact가 충분하면 compact를 기본 입력으로 승격합니다. 동일한 질문 입력은 캐시로 재사용하며, 결과는 `retrieval.prepared_evidence`에 저장하고 synthesis는 같은 packet을 소비합니다. 실제 선택 packet의 부족한 요구만 재검색 복구 대상으로 삼고, 실패한 compact는 timeout fallback에 사용하지 않습니다. 복구 가능한 docs·upload 주제 검색은 초기 한 번과 재계획 한 번, 요구당 최대 두 번입니다. upload의 symbol·definition 조회, retriever 부재와 지원하지 않는 source 제약은 쿼리 변경으로 해결하지 않습니다.
 
-명시적인 readiness refusal이 없는 상태에서 재검색 한도를 소진했거나 재검색할 수 없는 요구는 `terminal_failed_requirement_ids`로 유지합니다. 통과한 근거가 남으면 그 범위에서 합성·사후 검증을 거친 `partial` 답변을 제공하고 누락을 명시하며 저장·전송을 막습니다. 사용할 근거가 없으면 `evidence_insufficient` 실패 안내를 제공합니다. `request_ready`가 수치 판정으로 임계값에 미달하고 근거 요구도 부족하면 그 요구의 검색 복구 가능성을 판단합니다. 모든 근거 요구가 충족됐는데 준비 확률만 낮으면 개별 근거의 실패로 해석하지 않고, `evidence_insufficient`로 재검색과 합성을 중단합니다.
+합성 전에는 확정 계약의 타입·필수 입력·원본 바인딩을 확인하며, 검색 없는 작업은 사전 Decisions를 호출하지 않습니다. 미래 본문의 내용·형식 준수 가능성을 별도 확률로 예측하지 않습니다. 일반·compact 검증의 질문 예약도 각 근거 요구만 계산하며 준비 확률이나 요청 전체의 준비 실패 상태는 저장하지 않습니다. 실제 본문은 생성 후 로컬·의미 검증을 거쳐야 저장·전송할 수 있습니다.
+
+재검색 한도를 소진했거나 재검색할 수 없는 부족한 요구는 `terminal_failed_requirement_ids`로 유지합니다. 통과한 근거가 남으면 그 범위에서 합성·사후 검증을 거친 `partial` 답변을 제공하고 누락을 명시하며 저장·전송을 막습니다. 사용할 근거가 없으면 `evidence_insufficient` 실패 안내를 제공합니다. 전송 오류와 실제 원문·요구별 판정의 거절은 각각의 기존 오류 경계에서 처리합니다.
 
 ```mermaid
 flowchart TD
@@ -765,29 +784,38 @@ flowchart TD
     Check --> Accepted["통과 원문 유지"]
     Check --> Rejected["실패·거절 원문 제외"]
     Accepted --> Packet["일반·compact packet 선택"]
-    Packet --> Coverage["실제 packet 충분성·준비 판정"]
-    Coverage -->|"충분하고 준비됨"| Synthesis["같은 packet으로 합성·사후 검증"]
-    Coverage -->|"준비 거절 없이 부족·재검색 가능"| Retry["실패 요구만 한 번 재검색"]
+    Packet --> Coverage["대상 식별·분석 근거 모두 확인"]
+    Coverage -->|"충분"| Synthesis["같은 packet으로 합성·사후 검증"]
+    Coverage -->|"부족·재검색 가능"| Retry["실패 요구만 한 번 재검색"]
     Retry --> Check
-    Coverage -->|"준비 거절 없이 복구 불가·한도 소진"| Partial["남은 근거로 부분 답변 또는 실패 안내"]
-    Coverage -->|"명시적 준비 거절 또는 준비 확률만 미달"| Stop["생성 중단"]
+    Coverage -->|"복구 불가·한도 소진"| Partial["남은 근거로 부분 답변 또는 실패 안내"]
 ```
 
-판정 캐시는 `retrieval.decision_cache`에 요청 단위로 보존합니다. 각 판정에 제공한 문맥·요구·source 또는 packet 입력·질문 지시문·scope 지시문·모델의 canonical fingerprint가 같을 때만 확률 또는 refusal을 재사용합니다. 후보 판정에는 해석된 task와 원문만 포함하고, packet 판정에는 전체 요청과 대화 문맥도 포함합니다. source version과 선택 범위는 evidence identity에 포함됩니다. 자연어 의도를 유지하기 위해 `RetryState.original_tasks`의 원래 query를 의미 판정 입력과 캐시 fingerprint에 포함합니다. 원래 task가 없으면 현재 task의 query를 사용합니다. 재검색용 query와 검색 개수 k, batch 위치와 질문 이름은 판정 의미에서 제외하므로 검색어 재계획만으로 같은 의미 판정을 다시 호출하지 않습니다. 원래 query·조건·원문 범위가 바뀌면 새 판정입니다. 캐시 hit/miss와 생략한 질문 수는 `decision_cache` 관측에 남습니다.
+판정 캐시는 `retrieval.decision_cache`에 요청 단위로 보존합니다. 후보 판정과 요구별 packet 충분성은 모두 해석된 task와 해당 질문에 배정한 source 범위·문맥·필수 지원 참조만 사용합니다. `ExtractBody.requirement_ids`에 명시적으로 연결된 task에는 확정된 `operation="extract"`를 보존해 사전·사후 판정과 캐시 입력에 함께 사용하며, query 표현이나 다른 본문 작업에서 이를 추정하지 않습니다. 전체 요청의 본문 조건·대화·원본 답변을 근거 판정 입력에 섞지 않습니다. 캐시 입력은 해석된 query·requirement와 배정 원문·연결 관계를 가진 항목의 이름을 `<entry>`로 정규화한 뒤 해당 collection의 항목으로 `encode_decision_input()`에 실제 직렬화합니다. 이 입력 문자열과 scope 지시문·모델이 같을 때만 확률 또는 refusal을 재사용하므로, 원문·정책·rubric뿐 아니라 직렬화 표현의 변경도 캐시를 무효화합니다. encoder는 사후 자료 단위·본문 입력과 같은 기본 공백의 JSON 구분자를 사용합니다. 중립 항목 이름만 정규화하고 실제 source ID를 유지하므로 일반·compact의 같은 입력과 일부 기준만 빠진 캐시를 재사용할 수 있습니다. 본문 조건·대화만 바뀌어도 task와 원문이 같으면 근거 판정을 재사용할 수 있지만, `retrieval.prepared_evidence`는 갱신된 계약 revision으로 발행합니다. source version과 선택 범위는 evidence identity에 포함됩니다. 자연어 의도를 유지하기 위해 `RetryState.original_tasks`의 원래 query를 의미 판정 입력과 캐시 fingerprint에 포함합니다. 원래 task가 없으면 현재 task의 query를 사용합니다. 재검색용 query와 검색 개수 k, batch 위치와 질문 이름은 판정 의미에서 제외하므로 검색어 재계획만으로 같은 의미 판정을 다시 호출하지 않습니다. 원래 query·조건·원문 범위가 바뀌면 새 판정입니다. 캐시 hit/miss와 생략한 질문 수는 `decision_cache` 관측에 남습니다.
 
-Decisions 사전 검증 입력은 `sources`·`tasks` registry에 원문 근거와 요구를 한 번만 넣고 후보는 해당 ID를 참조합니다. packet은 중복된 요구 본문 대신 `requirement_names`를 참조합니다. 공통 판정 정책과 종류별 rubric은 `evaluation_policy`·`evaluation_rubrics`로 한 번 전달하고, 개별 질문은 대상 이름과 평가 범위를 지정합니다. 이 전송 표현은 서버의 근거 정본이나 검증 의미를 줄이지 않습니다. 동일 텍스트여도 출처·수집본·선택 범위가 다르면 같은 source로 합치지 않습니다. 요청 안의 판정 결과 재사용은 호출 자체를 생략하는 앱 캐시이며, 반복 입력에 낮은 단가를 적용하는 제공자 프롬프트 캐시와 구분합니다.
+Decisions 후보·요구별 검증 입력은 `sources`·`tasks` registry에 원문 근거와 해석된 task를 한 번만 넣고 이름이 지정된 항목은 해당 ID를 참조합니다. 공통 판정 정책과 해당 rubric은 각 `questions.instructions`에 실행 지시로 전달하며, `target_path`로 대상 항목과 평가 범위를 지정합니다. 사용자 문자열은 원문·task 데이터에만 둡니다. 사전·사후 요구별 판정은 같은 registry·직렬화 계약을 사용합니다. 동일 텍스트여도 출처·수집본·선택 범위가 다르면 같은 source로 합치지 않습니다. 요청 안의 판정 결과 재사용은 호출 자체를 생략하는 앱 캐시이며, 반복 입력에 낮은 단가를 적용하는 제공자 프롬프트 캐시와 구분합니다.
 
-사후에는 내용별 근거성과 표시 응답의 요청 충족을 먼저 평가하고, 실제 인용 범위의 요구 충분성은 별도 호출에서 평가합니다. 본문 검사에는 전체 요청과 대화 문맥, 실제 `AnswerDocument`인 `rendered_response.body`, 서버 부족 안내 목록인 `rendered_response.notices`, 내용 단위별 `units.cited_sources`를 제공합니다. 요구별 검사에는 해석된 `task`와 해당 요구에 대해 실제로 인용한 `sources`만 제공합니다. 전체 다중 대상 요청이나 이전 대화의 조건을 개별 요구에 다시 적용해, 다른 항목의 근거 부족을 확인된 항목의 부족으로 혼동하지 않도록 판정 범위를 분리합니다. 본문·출처는 각 검사 위치에 직접 제공하고 공통 정책과 rubric은 질문별 지시에 포함합니다. 판정 임계값·호출 예산·실패 차단 정책은 유지합니다. 개별 refusal은 해당 판정의 미통과로 기록하며 근거 없는 주장이나 요구 누락은 같은 확정 요청과 준비 packet으로 본문을 보정합니다. 다른 문장의 인용이나 인용하지 않은 packet 자료로 내용의 근거성을 대신하지 않습니다. 참조·발췌 일치·본문 hash·요청 revision 검사는 함께 적용합니다.
+사후 검증은 자료 기반 내용 단위, 전체 본문 조건, 요구별 인용 충분성의 호출을 분리합니다. `source`·`excerpt`·`inference`는 내용 단위마다 별도 HTTP 요청으로 검사하며, 각 입력에는 단일 unit과 그 단위의 `cited_sources`만 포함합니다. 같은 단위의 `grounded`와 인용 관련성 질문은 묶고, 여러 단위의 호출은 순서대로 실행합니다. 전체 요청·대화·다른 문장·바인딩한 원본은 이 근거 검사에 넣지 않습니다. 사용자 사실이나 창작 의도가 필요한 `interaction`·`example`의 근거성은 전체 요청·대화·바인딩한 원본·본문 조건을 사용하는 본문 호출에 남깁니다. `interaction` 기반 `transform_input`·`transform_answer`의 grounding도 바인딩한 입력·이전 답변에 요청된 편집을 적용한 충실도를 확인하고, 요청 밖 변경이나 새로운 근거 없는 외부 사실을 거절합니다. 바인딩한 이전 답변은 `source`·`excerpt`·`inference`의 자체 인용 원문을 대신하지 않습니다. 일반 본문 호출은 `request_fulfilled`와 내용·서식 조건을 평가합니다. 변환의 `request_fulfilled`는 `body.instruction`에 따른 변경의 수행과 요청 범위에 맞는 나머지 내용·구조의 보존을 확인하며, 허용된 차이 자체를 원본 충실도 오류로 판단하지 않습니다.
+
+바인딩한 이전 답변이 있고 현재 요청·이전 답변 모두 검색 요구와 인용이 없는 `transform_answer`에 한해, `request_fulfilled`를 별도 호출의 작업 입력으로 분리합니다. 이 입력은 evidence ID를 제외한 본문 작업의 kind·source·instruction, 바인딩한 원본 답변, 표시 본문·안내, `answer_scope`와 검색 누락·범위 정보를 유지합니다. 전체 대화·최신 발화의 별도 문맥을 이 질문에 반복하지 않습니다. `interaction` grounding과 내용·서식 조건은 기존 전체 문맥의 본문 호출에서 검사하며, `transform_input`·다른 본문 작업·검색 또는 인용이 있는 변환은 이 분기를 사용하지 않습니다. 단위별 소스 검사는 뒤에 필요한 본문·작업·요구별 호출을 예약하고 전체 36회·45초 한도를 공유합니다.
+
+요구별 충분성은 해석된 `task`와 그 요구에 대해 실제로 인용한 `sources`만 제공하는 별도 호출에서 대상 식별·분석 근거 두 기준으로 판단합니다. 사후 예약은 실제 질문 배열의 길이를 사용하므로 요구별 두 질문도 포함하며 36회·45초 한도를 유지합니다.
+
+본문 검사의 `confirmed_request`는 전달 행동인 `actions`와 `slack_recipient`를 제외합니다. 저장·전송은 본문 승인 뒤 실행하므로 파일·영수증·성공 안내를 본문 충족 조건으로 요구하지 않습니다. 실제 `AnswerDocument`인 `rendered_response.body`, 서버 부족 안내인 `rendered_response.notices`와 확정 요청 문맥으로 표시된 답변을 검사합니다. 정책·rubric은 각 질문의 실행 지시에 포함하며, 다른 질문의 원문이나 본문 조건을 개별 근거 판단에 섞지 않습니다. 개별 refusal은 해당 판정을 미통과로 기록하고, 근거 없는 주장이나 조건 누락은 같은 요청과 준비 packet으로 보정합니다. 다른 문장의 인용이나 인용하지 않은 packet 자료로 근거성을 대신하지 않습니다. 참조·발췌 일치·본문 hash·요청 revision 검사와 기존 임계값·실패 차단을 함께 적용합니다.
+
+`copy_input`·`copy_answer`는 행동 영수증과 의미 보고서를 제외한 결과 전체를 바인딩한 원본과 먼저 대조합니다. 본문·표현 구분·인용·검사·한계 정보가 바뀌면 모델 판정 전에 거부합니다. 검색 요구가 없는 검증된 입력·답변 복사는 새 주장이나 인용을 추가하지 않으므로 일반 `request_fulfilled`와 `grounded`·인용 관련성을 중복 평가하지 않습니다. 독립적인 내용·서식 조건은 계속 검사하고, 문장별 주제 범위가 있으면 `request_fulfilled`는 표시 문장이 선언한 주제에 속하는지만 판정합니다. 추가 조건이 없으면 원본의 의미 보고서를 유지하고, 조건이 있으면 그 조건의 새 판정만 보고서에 기록합니다. `compose`·`transform_input`·`transform_answer`·`extract`와 검색 요구가 있는 경로는 일반 요청 충족 판정을 유지합니다. `extract`는 근거가 하나인 경우에도 일반 합성에서 요청한 부분·원문 위치를 선택하고 기존 사후 검증·본문 보정을 거칩니다. 출력 오류·timeout 때의 원문 fallback은 실패 복구이며 정상 추출 완료와 구분합니다. 임계값과 실패 차단은 바꾸지 않습니다.
 
 본문 검사의 `retrieval_gaps`에는 terminal 누락 항목마다 해석된 `task`, `terminal_retrieval_reason`에 해당하는 `reason`, 같은 requirement ID의 현재 검색 진단인 `diagnostics`를 넣습니다. `files`는 해당 업로드 검색 범위의 `{file_id, name}` 목록입니다. 명시한 file ID가 있으면 그 파일만 포함하고, 업로드 파일 범위를 지정하지 않았으면 현재 활성 첨부를 포함하며, docs 요구에서는 빈 목록입니다. `diagnostics`에는 다른 요구의 성공 진단이나 과거 시도의 진단을 섞지 않습니다. `retrieval_notice`는 같은 terminal 상태에서 서버가 생성한 부족 안내이며, `rendered_response.notices`와 최종 응답의 `retrieved_evidence_incomplete` issue에 같은 문구가 들어가 UI와 TXT 내보내기에 표시됩니다. 합성기의 부분 답변 지시와 검색 요구 지시는 확인된 항목만 답하도록 일치시키고 부족 안내를 중복 생성하지 않습니다. terminal 누락이 있는 `request_fulfilled`는 전체 요청의 완료를 묻지 않고 `rendered_response.body`의 확인된 내용과 `rendered_response.notices`의 미확인 항목 안내를 함께 평가합니다. 필수 의미 내용과 aspect는 확인 가능한 대상에 적용하므로, 누락 항목의 값이나 이미 제공되는 안내를 본문에 쓰지 않았다는 이유만으로 재생성을 요구하지 않습니다. 확인 가능한 모든 항목의 답변과 원래 언어·출력 형식·금지 조건은 본문에 계속 요구하며, `format_fulfilled`는 `rendered_response.body`만 검사합니다. 검색 상태나 `no_result`는 원본 전체의 부재나 미확인 값을 단정하는 근거가 아닙니다.
 
 두 검증 단계에는 합성과 같은 턴 제한을 적용한 대화 이력과 대화 요약을 함께 전달합니다. 대화는 사용자 사실과 지시 대상의 해석에 쓰는 데이터이며, 확정 요청을 바꾸는 지시나 검색 근거를 대신하지 않습니다. 원문 근거에는 제목 경로, 선택 범위, 부분 발췌 여부와 선택된 표 셀의 행·열·병합 구조를 보존하고, 선택 밖의 셀 내용은 전달하지 않습니다.
 
-정확한 텍스트 anchor가 선택 범위 전체를 매핑하면 원본의 `line_number`, 요소 문자열 기준 반열린 `start`·`end`, 변경하지 않은 `text`, `partial_start`·`partial_end`를 가진 `source_lines`를 계산합니다. 합성과 Decisions 사전 검증에는 `excerpt`에 이미 있는 `text`를 빼고 위치 정보만 제공합니다. 사후 검증은 기존 표현대로 줄별 `text`도 함께 전달합니다. 전송용 `partial_end`는 두 검증 단계와 합성에서 줄 내용 중간에 선택이 끝났는지를 나타냅니다. AST 정의 범위처럼 마지막 LF·CR·CRLF만 선택하지 않은 경우에는 `false`로 제공해 코드 내용이 잘렸다고 해석하지 않게 합니다. 원문 `source_line_records()`의 개행 포함 경계와 선택 범위·offset·근거 ID는 바꾸지 않습니다. 물리적 줄 구분은 LF·CRLF·CR이며 빈 줄도 셉니다. 정확한 위치가 없거나 서로 다른 매핑이 충돌하면 빈 목록을 제공하고 줄 번호를 추정하지 않습니다. Notebook은 anchor의 셀 식별자와 셀 내부 줄을 함께 해석합니다. 합성과 사전 검증의 표 본문은 `excerpt`에 한 번만 담고 `table_cells`에는 셀 ID·행·열과 발췌 기준 문자 범위 `excerpt_range=[start,end]`를 전달합니다. 기본값인 span 1과 `is_header=false`는 생략하며 정책에서 그 의미를 명시합니다. 사후 검증은 선택한 셀 본문을 포함한 기존 표 표현을 유지합니다. 정본 표 셀과 선택 범위는 그대로 보존합니다.
+모델용 원문 범위·귀속 정보는 `source_scope_prompt_record()`에서 공통으로 생성합니다. `file_id`는 업로드 원문 요소의 metadata에서만 읽고, 값이 없거나 공식 문서이면 `null`로 전달하며 task 요구나 URI에서 추정하지 않습니다. 텍스트 원문에는 `selection`·`is_partial`과 `element_extent={kind,text_length,omitted_prefix,omitted_suffix}`를 전달합니다. `text_length`는 원문 요소의 전체 문자 길이이고 두 누락 필드는 선택 앞뒤에 원문이 남았는지를 나타내는 불리언입니다. 네이티브 전체 Python 요소는 `python_file`, Notebook 요소는 `notebook_cell`, 나머지는 `document_element`로 구분하며 요소의 끝을 문서 전체의 끝으로 간주하지 않습니다. 선택 밖의 텍스트와 AST 증명은 제공하지 않고 저장·API 스키마도 바꾸지 않습니다. 표는 기존 셀 선택으로 부분 여부를 계산하며 `element_extent`를 추가하지 않습니다. 이 투영은 사전·사후 검증, 바인딩한 원본과 합성 입력에 같은 기준을 적용합니다.
+
+정확한 텍스트 anchor가 선택 범위 전체를 매핑하면 원본의 `line_number`, 요소 문자열 기준 반열린 `start`·`end`, 변경하지 않은 `text`, `partial_start`·`partial_end`를 가진 `source_lines`를 계산합니다. 합성·Decisions 사전 검증·사후 요구별 검증에는 `excerpt`에 이미 있는 `text`를 빼고 위치 정보만 제공합니다. 사후 내용 단위·본문 검증은 줄별 `text`도 함께 전달합니다. 전송용 `partial_end`는 두 검증 단계와 합성에서 줄 내용 중간에 선택이 끝났는지를 나타냅니다. AST 정의 범위처럼 마지막 LF·CR·CRLF만 선택하지 않은 경우에는 `false`로 제공해 코드 내용이 잘렸다고 해석하지 않게 합니다. 원문 `source_line_records()`의 개행 포함 경계와 선택 범위·offset·근거 ID는 바꾸지 않습니다. 물리적 줄 구분은 LF·CRLF·CR이며 빈 줄도 셉니다. 정확한 위치가 없거나 서로 다른 매핑이 충돌하면 빈 목록을 제공하고 줄 번호를 추정하지 않습니다. Notebook은 anchor의 셀 식별자와 셀 내부 줄을 함께 해석합니다. 합성과 Decisions에 제공하는 `source_locations`는 내부 `cell_index`를 제외하고 `cell_number=cell_index+1`을 담습니다. 모델이 보는 셀 번호는 1부터 시작하며, 저장된 `SourceAnchor`와 HTTP API의 `cell_index`는 0부터 시작하는 계약을 유지합니다. 합성·사전 검증·사후 요구별 검증의 표 본문은 `excerpt`에 한 번만 담고 `table_cells`에는 셀 ID·행·열과 발췌 기준 문자 범위 `excerpt_range=[start,end]`를 전달합니다. 기본값인 span 1과 `is_header=false`는 생략하며 정책에서 그 의미를 명시합니다. 사후 내용 단위·본문 검증은 선택한 셀 본문을 포함한 표 표현을 사용합니다. 정본 표 셀과 선택 범위는 그대로 보존합니다.
 
 합성 프롬프트의 고정 Reference Policy는 동적인 요청 계약 앞에 둡니다. 선택한 입력 원문과 원본 답변은 전용 payload로 전달하고, 대화 이력에 같은 내용이 있으면 검증된 발화 ID·범위 또는 같은 답변 표시 본문에 한해 참조 문구로 바꿉니다. 다른 대화 내용과 부분 답변·전달 안내는 유지합니다. 원본 답변의 전체 의미 검증 보고서를 반복하지 않고 거절·임계값 미달인 항목만 `semantic_limitations`로 전달해 미확인 한계를 보존합니다. 서버의 원문·답변·보고서 정본과 사전 검증한 packet은 이 투영으로 변경하지 않습니다.
 
-원문 위치를 표시할 내용 단위는 `basis="source"`, 하나의 `refs`와 `source_location={ref, start, end}`를 사용합니다. 범위는 원문 요소 문자열 기준의 반열린 문자 범위이며 해당 근거의 선택 범위 안에 있어야 합니다. 서버는 검증된 `source_lines`에서 파일·셀·줄 위치를 계산해 내용 단위의 `text`를 생성합니다. 확정 응답을 다시 읽을 때는 이 문자열이 구조화 위치와 일치하는지도 검사하며, 저장된 본문을 조용히 고치지 않습니다. 범위·표시 불일치는 `source_location_mismatch`, 정확한 원본 매핑이 없으면 `source_location_unverifiable`입니다. 자연어 문장의 파일명·행 수를 정규식으로 해석하지 않습니다. 의미 검증은 설명과 위치의 연결 및 요청 충족을 확인하고, 명시적인 원문 좌표를 구조화 위치 없이 서술한 내용도 거부합니다. 높은 Decisions 확률이 물리적 위치 불일치를 덮어쓰지는 못합니다. 재합성에는 실제 오류 코드와 범위 수정 기준을 전달합니다. 보정 한도 뒤에도 위치 검사가 실패하면 해당 내용을 제외하고 `source_location_unverified` 제한과 `model_output_invalid`를 반환합니다. 필수 위치를 삭제한 부분 답변을 완료로 승격하거나 자동 저장·전송하지 않습니다.
+생성 중 원문 위치를 표시할 전용 내용 단위는 `text="<source_location>"`, `basis="source"`, 하나의 `refs`와 `source_location={ref, start, end}`를 사용합니다. 범위는 원문 요소 문자열 기준의 반열린 문자 범위이며 해당 근거의 선택 범위 안에 있어야 합니다. 서버는 검증된 `source_lines`에서 파일·셀·줄 위치를 계산하며, 위치 전용 단위의 정확한 `<source_location>` placeholder만 위치 문자열로 치환합니다. 코드나 설명은 `source_location=null`인 별도 단위에 둡니다. 위치 단위의 다른 텍스트를 덮어쓰지 않고 보존한 채 기존 불일치 검사와 실패 초안 보정으로 처리합니다. 이미 확정된 위치 문자열은 재작성 없이 구조화 위치와 일치하는지 검사하므로 저장 본문 재검증과 복사를 반복해도 같은 결과를 유지합니다. 범위·표시 불일치는 `source_location_mismatch`, 정확한 원본 매핑이 없으면 `source_location_unverifiable`입니다. 자연어 문장의 파일명·행 수를 정규식으로 해석하지 않습니다. 의미 검증은 설명과 위치의 연결 및 요청 충족을 확인하고, 명시적인 원문 좌표를 구조화 위치 없이 서술한 내용도 거부합니다. `request_fulfilled`는 확정 위치 문자열을 인용 원문과 별개의 표시 label로 해석합니다. 원문 인용과 위치를 함께 요청했다면 두 내용이 모두 있어야 하며, 모든 표시 block을 함께 보고 사용자가 명시한 순서만 검사합니다. 높은 Decisions 확률이 물리적 위치 불일치를 덮어쓰지는 못합니다. 재합성에는 실제 오류 코드와 범위 수정 기준을 전달합니다. 보정 한도 뒤에도 위치 검사가 실패하면 해당 내용을 제외하고 `source_location_unverified` 제한과 `model_output_invalid`를 반환합니다. 필수 위치를 삭제한 부분 답변을 완료로 승격하거나 자동 저장·전송하지 않습니다.
 
 사후 판정은 현재 본문 hash와 인용 순서의 전체 근거 fingerprint에 연결합니다. 본문이나 인용 원문이 바뀐 상태에 이전 판정을 붙이면 복원·내보내기 검증에서 거부합니다. 본문 일부를 제거한 뒤에도 새로운 본문 전체가 Decisions를 통과해야 완료 답변으로 처리합니다. 복구 한도 내에 통과하지 못하면 본문 없는 실패 안내를 제공하고 저장·전송을 막습니다. 사전 packet을 새 원문 발췌로 바꾸어 표시하지 않습니다. 이전 답변의 복사·변환은 계약이 지정한 답변 hash로 원문을 확인하고 해당 본문과 인용 근거를 두 검증 단계에 함께 제공합니다.
 
@@ -876,18 +904,17 @@ React는 대화별 초안·답변·첨부 변경·Slack 입력을 브라우저 �
 
 ## 8. 테스트 및 검증
 
-회귀 테스트는 요청 계약, 검색·검증·합성·액션 실행, 대화 메모리, 업로드 격리와 원문·인용 보존을 검증합니다. Python 클라이언트의 스트림 실패 처리, 구조화 스키마 변환, 생성 파일 만료·정리, 벤치마크 release 판정도 핵심 계약으로 검증합니다. React 컴포넌트 검사는 첫 화면과 예시 선택, 대화 전환, 실패 복구, 초안 복원, 부분 답변·행동 결과 표시를 확인합니다. 실제 브라우저 검사는 질문·첨부·복원·저장·다운로드·Slack 요청과 키보드·모바일 화면의 주요 동작을 확인합니다. 설정·로깅·사용량 진단과 벤치마크 생성·승격·승인·보고 도구의 전체 회귀는 포함하지 않습니다.
+회귀 테스트는 요청 계약, 검색·검증·합성·액션 실행, 대화 메모리, 업로드 격리와 원문·인용 보존을 검증합니다. Python 클라이언트의 스트림 실패 처리, 구조화 스키마 변환, 생성 파일 만료·정리, 벤치마크 release 판정도 핵심 계약으로 검증합니다. React 컴포넌트 검사는 첫 화면과 예시 선택, 대화 전환, 실패 복구, 초안 복원, 부분 답변·행동 결과 표시를 확인합니다. 실제 브라우저 검사는 질문·첨부·복원·저장·다운로드·Slack 요청과 키보드·모바일 화면의 주요 동작을 확인합니다. 기본 검증 명령은 저장소의 Python 테스트 전체를 실행하며 설정·사용량·평가 보고서 등 지원 기능의 회귀 검사도 포함합니다. 실제 외부 서비스의 품질과 모든 입력 조합을 보장하지는 않습니다.
 
-테스트는 핵심 기능별 대표 성공·실패 경로로 제한합니다. 실제 파일, HTTP 대체 서버, 공개 노드와 그래프를 통해 원문 무결성·검색 범위·세션 격리·저장 멱등성·실패 복구를 검증합니다. 구조화 LLM 호출은 실제 모델 어댑터와 전송 스키마 검사를 거치며 외부 HTTP 응답만 대체합니다. 유효 fixture는 완전한 모델 응답을 명시하고, 잘못된 원시 응답의 누락 필드나 타입을 테스트 도우미가 보정하지 않습니다. 내부 모델·직렬화·프롬프트 문구와 파서의 세부 입력 조합은 별도 테스트로 모두 유지하지 않습니다.
+테스트는 공개 동작의 성공·실패 경로와 수정한 결함의 회귀를 확인합니다. 실제 파일, HTTP 대체 서버, 공개 노드와 그래프를 통해 원문 무결성·검색 범위·세션 격리·저장 멱등성·실패 복구를 검증합니다. 구조화 LLM 호출은 실제 모델 어댑터와 전송 스키마 검사를 거치며 외부 HTTP 응답만 대체합니다. 유효 fixture는 완전한 모델 응답을 명시하고, 잘못된 원시 응답의 누락 필드나 타입을 테스트 도우미가 보정하지 않습니다. 원문 범위·직렬화·모델 입력 경계처럼 결과에 영향을 주는 계약은 해당 공개 경로에서 확인합니다.
 
 스트림 중단·잘린 UTF-8·리다이렉트에서는 완료되지 않은 응답을 성공으로 처리하거나 질문을 자동 재전송하지 않는지 확인합니다. 스키마 검사는 union 변환의 의미와 필수·null·값 제약을 보존하는지 확인합니다. 생성 파일은 manifest의 만료 시각을 따르고, 만료 후 중복 저장 방지 기록과 저장 중인 임시 파일을 보존해야 합니다. 벤치마크는 평가 오류·미채점·결과 누락·중복·금지 실행·실행 증거 누락이 release 판정에서 사라지지 않는지 검증합니다.
 
 ```bash
-uv lock --check
-uv run --locked pytest -q
-uv run --locked python script/check_encoding.py
-uv run --locked python script/sync_env_example.py --check
+uv run --locked python script/verify.py
 ```
+
+이 명령은 잠금 파일·UTF-8 인코딩·환경 예시·생성 API 일치, Python 전체 회귀, 프런트엔드 타입·lint·단위 검사와 Chromium 인수 검사를 순서대로 실행합니다. `.github/workflows/verify.yml`도 같은 명령을 사용합니다. 외부 모델·Slack을 호출하는 live 검사와 실제 Docling 변환은 이 경로에서 제외합니다. 관련 코드만 빠르게 확인할 때는 `--skip-browser`를 사용할 수 있으며 웹 변경의 최종 완료 검사에는 기본 전체 명령을 사용합니다. 프런트엔드 의존성과 Chromium은 먼저 준비해야 합니다.
 
 프런트엔드의 타입·계약·컴포넌트·실제 브라우저 검사는 [프런트엔드 검증 명령](frontend.md#4-계약-생성과-검증)을 따릅니다. `npm --prefix frontend run test:e2e`는 정적 빌드를 만든 뒤 개발 프록시와 FastAPI 정적 제공을 각각 검사합니다. 실제 Chromium과 FastAPI를 실행하며 외부 모델·Slack HTTP 경계를 대체합니다. 질문과 첨부의 실제 요청, 세션 상태, 보관 원문, 저장 산출물과 다운로드 바이트를 확인합니다. 접근성 검사는 한국어 입력·버튼 이름, 모바일·낮은 화면의 조작과 포커스, 주요 요소의 테마별 대비를 확인하며 모든 색 조합이나 스크린리더의 전체 동작을 감사하는 검사는 아닙니다.
 
@@ -901,7 +928,21 @@ uv run python -m src.eval.request_contract_eval --live --run-id v2_run_01 --repe
 
 이 평가는 실제 설정된 planner 모델만 호출하며 부정·언급·인용·복합 요청·정정·축약·목적지 보충을 실행 전에 고정한 42개 기대값과 각 3회 비교합니다. 실행 ID별 manifest·모델 원문·계약·오류·차원별 결과를 모두 보존합니다. 반복 횟수와 통과 기준, v1의 12/21 이력 보존 규칙은 [벤치마크 가이드](benchmarking.md#26-요청-계약-실제-모델-평가)를 참고하세요. 검색·합성·파일 생성·Slack 전송은 실행하지 않습니다. 기본 회귀의 계약 소비 테스트는 정답 계약과 모델 응답 fixture를 사용하므로 자연어 해석 정확도를 증명하지 않습니다. 소비 테스트는 실제 임시 파일과 localhost Slack HTTP 대체 서버로 수정 본문·인용·보류/완료/취소·재시도·오류 차단을 검증합니다.
 
-회귀 테스트 결과는 [README의 검증 결과](../README.md#검증-결과)를 참고하되, 과거 전체 회귀 기록과 현재 핵심 테스트의 범위를 구분합니다. 문서·응답 검사는 실제 검색의 원문 식별과 선택 범위, 표 셀 선택, 허위 출처 거부, 잘못된 내용 제거와 원문 복구, 응답·저장·전송의 동일 본문 사용을 다룹니다. 파일 검색은 업로드 유무, 요청한 파일 범위, 인용과 세션 격리를 검증합니다.
+개별 경계의 실제 모델 회귀는 서버 설정의 planner·Decisions API를 사용하며 명시적인 환경 변수로 실행합니다. 기본 회귀와 `script/verify.py`에서는 건너뜁니다. 다음 명령은 Git Bash 기준이며 planner의 요청 해석과 복사 조건, 대상 식별·API 귀속·인용 근거성, 원문 발췌와 위치 표시의 요청 충족, 이전 답변의 편집·전달 계약을 확인합니다. 실제 코드 귀속과 조건부 가능성, 정적 식별과 실행 입증을 구분하는 검사도 포함합니다.
+
+```bash
+RUN_LIVE_PLANNER_SOURCE_LOCATIONS=1 uv run --locked pytest -q tests/core/test_planner_source_locations.py
+RUN_LIVE_PLANNER_SYMBOL_IDENTITY=1 uv run --locked pytest -q tests/core/test_planner_symbol_identity_live.py
+RUN_LIVE_PLANNER_COPY_OBLIGATIONS=1 uv run --locked pytest -q tests/core/test_planner_copy_obligations_live.py
+RUN_LIVE_EXACT_INPUT_VALIDATION=1 uv run --locked pytest -q tests/core/test_exact_input_validation_live.py
+RUN_LIVE_CODE_BINDING_SUFFICIENCY=1 uv run --locked pytest -q -s tests/core/test_code_binding_sufficiency_live.py
+RUN_LIVE_POST_SOURCE_QUOTE=1 uv run --locked pytest -q -s tests/core/test_post_source_quote_live.py
+RUN_LIVE_INFERENCE_API_IDENTITY=1 uv run --locked pytest -q -s tests/core/test_inference_api_identity_live.py
+RUN_LIVE_EXTRACT_LOCATION_FULFILLMENT=1 uv run --locked pytest -q -s tests/core/test_extract_location_fulfillment_live.py
+RUN_LIVE_TRANSFORM_ANSWER_DELIVERY=1 uv run --locked pytest -q -s tests/core/test_transform_answer_delivery_live.py
+```
+
+회귀 테스트 결과는 [README의 검증 결과](../README.md#검증-결과)를 참고하되, 과거 실행 기록의 날짜·범위와 현재 검증 명령의 범위를 구분합니다. 문서·응답 검사는 실제 검색의 원문 식별과 선택 범위, 표 셀 선택, 허위 출처 거부, 잘못된 내용 제거와 원문 복구, 응답·저장·전송의 동일 본문 사용을 다룹니다. 파일 검색은 업로드 유무, 요청한 파일 범위, 인용과 세션 격리를 검증합니다.
 
 대화 메모리는 확정된 대화만 저장하는지, Unicode·이스케이프 문자가 포함된 입력도 크기 상한을 지키는지, 요약 모델 실패 시 기존 기억을 보존하는지 검증합니다. 요약 생성·저장·다음 프롬프트 전달과 요청 간 기억 유지, 실행 실패 시 롤백, 세션 격리도 대표 흐름으로 확인합니다.
 

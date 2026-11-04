@@ -4,7 +4,7 @@
 
 ## 질문 실행 결과와 제공자 오류
 
-질문의 SSE 스트림은 `final_response` 하나로 완료됩니다. 공통 `TurnResult`는 `status`, `response`, `message`, `problem`, `request_id`, `missing_slots`를 전달합니다. `completed`와 `partial`만 검증된 `AnswerResponse`를 포함할 수 있습니다. `needs_input`은 실제 누락된 사용자 정보에 대한 질문이며, `failed`와 `refused`는 답변 문서를 만들지 않습니다. `partial`은 답변 본문과 미완료 원인을 함께 전달합니다. 근거 부족으로 제한된 본문을 제공할 수도 있고, 본문은 완성됐지만 저장에 실패했을 수도 있습니다. 본문의 한계는 `issues`와 의미 검증에서, 저장·전송 결과는 각 `ActionReceipt`에서 확인합니다. 단순 확인이나 취소 완료는 `completed`입니다.
+질문의 SSE 스트림은 `final_response` 하나로 완료됩니다. 공통 `TurnResult`는 `status`, `response`, `message`, `problem`, `execution_id`, `missing_slots`를 전달합니다. `completed`와 `partial`만 검증된 답변을 포함하며 HTTP 경계에서 원문 registry가 있는 `SourcedAnswerPayload`로 직렬화합니다. `needs_input`은 실제 누락된 사용자 정보에 대한 질문이며, `failed`와 `refused`는 답변 문서를 만들지 않습니다. `partial`은 답변 본문과 미완료 원인을 함께 전달합니다. 근거 부족으로 제한된 본문을 제공할 수도 있고, 본문은 완성됐지만 저장에 실패했을 수도 있습니다. 본문의 한계는 `issues`와 의미 검증에서, 저장·전송 결과는 각 `ActionReceipt`에서 확인합니다. 단순 확인이나 취소 완료는 `completed`입니다.
 
 `problem`의 `code`, `stage`, 안전한 `message`, `next_action`, `retry_after_seconds`는 `include_debug=False`에서도 유지됩니다. 제공자가 정상 질문의 출력 스키마를 거부해도 질문을 고쳐 쓰라는 보충 질문으로 바뀌지 않습니다. 답변 없는 실패·거절·보충 질문은 세션의 이전 답변을 교체하지 않습니다. 정상 실행에서 화면에 제공한 부분 답변은 `previous_response`에 보존되며, 사용자가 새로 명시한 복사·변환·저장 요청의 원본이 될 수 있습니다. 전체 기한 만료 뒤 완료된 행동 결과를 보존하는 `partial/request_timeout`은 예외이며, 기존 대화 기억과 이전 답변을 교체하지 않고 전달 상태와 저장 operation binding만 보존합니다. 보류 작업은 확정된 계약과 본문 준비·전달 상태에 따라 보존하거나 갱신합니다. 화면 갱신이나 대화 복원은 질문을 자동 재전송하지 않습니다.
 
@@ -19,18 +19,18 @@
 | `call_budget_exhausted` | 역할별 호출 횟수 또는 모델 호출·재시도 대기 시간 예산이 소진됨 | `retry_later`. 추가 모델 호출 없이 종료합니다. 진단의 `budget_reason`은 `calls` 또는 `role_timeout`입니다. |
 | `request_timeout` | `REQUEST_TIMEOUT_SECONDS`로 정한 전체 질문 실행 시간이 소진됨 | `retry_later`. 다음 단계·호출·대화 기억 커밋을 차단합니다. 이미 완료된 저장·전송 결과는 보존하므로 화면의 결과를 확인한 뒤 수동으로 다시 요청합니다. |
 | `answer_validation_failed` | 생성한 본문이 의미 검증 또는 필수·금지 내용·형식 조건을 끝내 충족하지 못함 | `retry_later`. 검증에 실패한 답변을 완료로 승인하거나 저장·전송하지 않습니다. 선행 검색 부족과 최종 본문 검증 실패를 구분합니다. |
-| `model_refusal` | 호출 전체에 대한 명시적 refusal·content filter, 또는 근거 부족 동반 여부와 관계없이 `request_ready`가 명시적으로 거절됨 | `none`. `refused`로 표시하고 재검색·재생성하지 않습니다. Decisions의 이름별 원문·요구·사후 판정 refusal은 아래 개별 판정 정책을 적용하며 곧바로 전체 `model_refusal`로 바꾸지 않습니다. |
+| `model_refusal` | 호출 전체에 대한 명시적 refusal·content filter | `none`. `refused`로 표시하고 재검색·재생성하지 않습니다. Decisions의 이름별 원문·요구·사후 판정 refusal은 아래 개별 판정 정책을 적용하며 곧바로 전체 `model_refusal`로 바꾸지 않습니다. |
 | `internal_error` | 분류되지 않은 내부 실행 오류 | `none`. 예외 원문 대신 안전한 안내와 request ID를 전달하며 운영자가 진단을 확인합니다. |
 | `evidence_insufficient` | 검색·근거 검증 후 답변에 필요한 근거를 확보하지 못함 | `supply_information`. 기술적 검색 실패와 실제 사용자 정보 누락을 구분합니다. |
 | `upload_revision_conflict` | 질문에 포함된 첨부 revision이 현재 세션과 다름 | `none`. 현재 첨부 상태를 다시 확인한 뒤 요청합니다. 자동 재전송하지 않습니다. |
 
 Planner와 synthesis는 각 역할별 한 질문에서 최대 3회, 45초의 공통 호출 예산을 사용합니다. 시간은 해당 역할의 모델 호출과 재시도 대기에만 누적하며, 검색·다른 역할의 검증·로컬 처리 시간은 차감하지 않습니다. 전송 재시도·출력 수정·합성의 축소 복구·그래프의 재진입이 같은 예산을 공유하며 SDK 자체 재시도는 0회입니다. 제공자의 대기 시간이 역할 또는 전체 요청의 남은 시간보다 크면 재시도하지 않습니다. 일반 대화 요약 모델에도 역할별 호출·시간 예산과 전체 요청 기한을 적용하지만 구조화 출력 수정은 적용하지 않습니다.
 
-OpenAI Decisions API는 `pre_synthesis_validation`에 최대 6회·90초, `post_synthesis_validation`에 최대 6회·45초의 예산을 사용합니다. 사전 후보의 관련성·지원 항목 판정, 일반·compact packet의 충분성 판정, 재검색 후 검증, 요청당 최대 200개 질문의 배치, 그래프 재진입과 일시적 429·timeout·연결·5xx 재시도가 같은 단계 예산을 공유합니다. 캐시로 재사용한 판정은 새 API 호출을 소비하지 않습니다. 각 HTTP timeout은 `VALIDATION_TIMEOUT_SECONDS` 기본 20초, 역할과 전체 요청의 남은 시간 중 작은 값입니다. 인증·권한·할당량 오류와 유효하지 않은 판정 응답은 호출 전체를 실패 처리합니다. 한 항목의 refusal 뒤에 잘못된 이름·중복·누락·확률이 있어도 검사를 끝까지 적용하며 앞선 배치의 정상 결과만으로 성공을 선언하지 않습니다. 호출 실패는 `problem.stage`로 구분하고 답변 제공과 저장·전송을 차단합니다.
+OpenAI Decisions API는 `pre_synthesis_validation`에 최대 6회·90초, `post_synthesis_validation`에 최대 36회·45초의 예산을 사용합니다. 사전 후보의 관련성·지원 항목 판정, 일반·compact packet의 충분성 판정, 재검색 후 검증, 요청당 최대 200개 질문의 배치, 그래프 재진입과 일시적 429·timeout·연결·5xx 재시도가 같은 단계 예산을 공유합니다. 캐시로 재사용한 판정은 새 API 호출을 소비하지 않습니다. 각 HTTP timeout은 `VALIDATION_TIMEOUT_SECONDS` 기본 20초, 역할과 전체 요청의 남은 시간 중 작은 값입니다. 인증·권한·할당량 오류와 유효하지 않은 판정 응답은 호출 전체를 실패 처리합니다. 한 항목의 refusal 뒤에 잘못된 이름·중복·누락·확률이 있어도 검사를 끝까지 적용하며 앞선 배치의 정상 결과만으로 성공을 선언하지 않습니다. 호출 실패는 `problem.stage`로 구분하고 답변 제공과 저장·전송을 차단합니다.
 
-유효한 이름별 refusal은 `DecisionResult.refused_names`로 반환하고 다른 이름의 정상 확률은 `probabilities`에 유지합니다. 사전 후보 판정은 requirement·evidence identity와 실제 입력·질문·모델·지시문 fingerprint로 묶으며 실패·거절 후보를 제외합니다. 일반 packet의 `request_ready`가 명시적으로 거절되면 근거 부족을 동반해도 `model_refusal`로 재검색과 생성을 중단합니다. 일반 packet의 요구가 부족하거나 요구 판정이 거절되면 복구 가능한 실패 요구만 한 번 재계획합니다. 검색은 요구당 초기 한 번과 재계획 한 번, 최대 두 번이며 docs 도구 내부의 추가 보완 검색은 없습니다. compact만 부족하거나 준비 판정이 거절되면 해당 fallback을 사용하지 않습니다. 재검색 불가·한도 소진 후에도 부족하면 남은 검증 근거로 `partial` 답변을 제공하고 저장·전송을 막으며 근거가 없으면 `evidence_insufficient`로 종료합니다. 모든 근거 요구가 충족됐는데 일반 준비 확률만 낮으면 `evidence_insufficient`로 생성과 재검색을 중단합니다.
+유효한 이름별 refusal은 `DecisionResult.refused_names`로 반환하고 다른 이름의 정상 확률은 `probabilities`에 유지합니다. 사전 후보 판정은 requirement·evidence identity와 실제 입력·질문·모델·지시문 fingerprint로 묶으며 실패·거절 후보를 제외합니다. 일반 packet의 요구가 부족하거나 요구 판정이 거절되면 복구 가능한 실패 요구만 한 번 재계획합니다. 검색은 요구당 초기 한 번과 재계획 한 번, 최대 두 번이며 docs 도구 내부의 추가 보완 검색은 없습니다. compact의 근거 요구가 부족하거나 해당 판정이 거절되면 그 fallback을 사용하지 않습니다. 재검색 불가·한도 소진 후에도 부족하면 남은 검증 근거로 `partial` 답변을 제공하고 저장·전송을 막으며 근거가 없으면 `evidence_insufficient`로 종료합니다.
 
-사후 개별 refusal은 `semantic_validation.checks`의 `status="refused"`, `probability=null`로 기록합니다. 내용별 근거성, 본문 전체 요청 충족, 실제 인용 범위의 요구 충분성 중 해당 항목을 미통과로 처리해 제한된 본문 보정·필터링·재검증을 적용합니다. 다른 문장의 인용이나 인용하지 않은 packet 자료로 판정을 대체하지 않습니다. 거절을 확률 0으로 바꾸거나 통과로 간주하지 않으며 refusal 원문은 결과·로그에 남기지 않습니다.
+사후 개별 refusal은 `semantic_validation.checks`의 `status="refused"`, `probability=null`로 기록합니다. 내용별 근거성, 본문 전체 요청 충족, 실제 인용 범위의 대상 식별·분석 근거 중 해당 항목을 미통과로 처리해 제한된 본문 보정·필터링·재검증을 적용합니다. 다른 문장의 인용이나 인용하지 않은 packet 자료로 판정을 대체하지 않습니다. 거절을 확률 0으로 바꾸거나 통과로 간주하지 않으며 refusal 원문은 결과·로그에 남기지 않습니다.
 
 전체 요청 시간은 세션 잠금을 얻은 뒤 `AgentFlowManager.run_agent_flow()`에 진입할 때 시작하며, 기본값은 60초입니다. 요약·계획·검색·검증·생성·저장·전송을 포함합니다. 모델과 검색의 개별 네트워크 timeout은 역할 예산과 전체 남은 시간 안으로 제한하고, 호출·단계 경계에서 만료를 확인합니다. 호출이 늦게 반환되면 정상 완료로 승인하지 않으며 실제 완료된 행동의 영수증은 보존합니다. 동기 SDK나 로컬 작업을 별도 스레드에서 강제 종료하지 않으므로, 진행 중인 작업이 timeout을 무시하면 실패 응답의 도착은 설정 시간보다 늦어질 수 있습니다.
 
@@ -49,7 +49,7 @@ OpenAI Decisions API는 `pre_synthesis_validation`에 최대 6회·90초, `post_
 | `UPLOAD_RETRIEVER_BUILD_FAILED` | 과거 단일 업로드 실행 경로의 retriever 준비 실패 기록입니다. 현재 질문 런타임은 인덱스를 생성하지 않으며 첨부 후보 실패는 HTTP 오류로 반환합니다. | 과거 결과의 실패 원인을 읽는 코드입니다. 현재 첨부 실패는 아래 HTTP 코드로 확인합니다. | 아니요. 현재 런타임에서는 발생하지 않습니다. |
 | `VALIDATION_UNRESOLVED_REFERENCES` | 실제 표시 내용의 `refs`가 해당 synthesis packet에 없거나, 근거가 필요한 내용에 참조가 없습니다. 의미적 사실 판정은 아닙니다. | 더 구체적인 자료를 제공하거나 답변 범위를 좁힙니다. 운영자는 packet 선택과 출력 refs를 확인합니다. | 조건부. 확보한 검색 결과를 재사용해 본문과 참조를 함께 다시 생성할 수 있습니다. |
 | `VALIDATION_MISSING_CONTENT` | 본문이 비었거나 요청한 형식·출처 범위가 부족합니다. 원문 발췌 불일치와 Decisions의 내용 근거·요청 충족 판정이 임계값에 못 미치는 경우도 포함합니다. | 운영자는 로컬 `checks`, `semantic_validation`, 요청 계약과 요구별 근거를 확인합니다. 사용자는 부족한 자료나 조건을 보완할 수 있습니다. | 조건부. 같은 근거와 요청으로 본문을 보정합니다. 끝내 통과하지 못하면 실패 또는 제한된 원문 안내를 반환하고 저장·전송을 차단합니다. |
-| `DEBUG_NORMALIZATION_FAILED` | web API가 raw debug payload를 `AgentDebugInfo`로 정규화하는 중 latency/debug 구조 검증에 실패했습니다. | 답변 자체보다 관측성 정보가 불완전한 상태입니다. 운영자는 raw debug payload와 `schema_version`을 확인합니다. | 아니요. 같은 사용자 요청 반복보다 debug schema/normalizer 수정이 필요합니다. |
+| `DEBUG_NORMALIZATION_FAILED` | 런타임 진단 수집이나 HTTP 경계의 필수 관측 검사에 실패했습니다. | 답변 자체보다 관측성 정보가 불완전한 상태입니다. 운영자는 `DebugPayload`의 누락 필드·오류와 `schema_version`을 확인합니다. | 아니요. 같은 사용자 요청 반복보다 진단 수집·계약 수정이 필요합니다. |
 | `SLACK_RECIPIENT_MISSING` | 수신자와 기본값이 없습니다. | 수신자 하나를 입력합니다. | 입력 후 |
 | `SLACK_RECIPIENT_INVALID` | 명시한 수신자를 검증하지 못했습니다. | ID 또는 이메일을 확인합니다. | 명시 교정 후 |
 | `SLACK_RECIPIENT_AMBIGUOUS` | 수신자 입력이 모호합니다. | 대상 하나를 지정합니다. | 명시 교정 후 |

@@ -8,7 +8,7 @@ React 정적 빌드는 FastAPI의 `/app/`에서 제공합니다. 서비스 관�
 
 첫 화면은 제목과 짧은 설명, 입력창, 질문 예시 2개 순서로 배치하고, 대화가 시작되면 입력창을 화면 하단에 유지합니다. 지원 문서와 첨부 형식·용량은 사이드바 하단의 ‘사용 안내’에서 펼쳐 봅니다. 사이드바는 새 채팅·검색·최근 대화를 먼저 보여 주고, 확정 파일 목록은 ‘첨부 자료’에서 확인합니다. 테마와 Slack 수신자는 ‘설정’ 안에서 변경합니다. 입력창의 `+`로 선택한 파일과 서버에서 확정한 첨부 목록을 구분하며, 예시 선택은 기존 작성 초안을 덮어쓰거나 전송하지 않습니다. [화면 흐름 브라우저 검사](../frontend/tests/e2e/ui-parity.spec.ts)는 첫 화면의 정렬·입력 순서·예시·사용 안내·파일 선택과 확정 목록·좁은 모바일 화면과 메뉴를 실제 Chromium에서 확인합니다.
 
-대화 화면은 상단의 대화 제목, 오른쪽 사용자 발화, 카드 배경 없이 읽는 답변 본문, 하단의 후속 질문 입력창으로 구성합니다. 정상 완료 상태는 스크린리더용으로 제공하고, 부분 답변·실패·근거 누락과 원문 불일치 안내는 화면에 표시합니다. 본문의 작은 인용 번호는 해당 절의 근거를 열며, 답변 아래에는 실제 사용한 고유 근거·TXT 저장·‘답변 정보’를 한 줄의 보조 기능으로 모읍니다. 좁은 화면이나 긴 저장 안내에서는 줄바꿈합니다. 검증 집계와 요청 ID는 기본으로 접힌 ‘답변 정보’에 포함하고, 답변 본문이 없는 실패 등은 기존 ‘요청 정보’에서 요청 ID를 확인합니다. 저장·전송의 실제 결과와 답변의 한계는 상세를 펼치지 않아도 볼 수 있습니다. 코드와 표는 좁은 화면에서도 대화 영역을 넓히지 않고 읽을 수 있어야 합니다. 새 질문을 명시적으로 제출하면 해당 질문으로 이동하지만, 답변이 도착하거나 초안을 입력할 때는 읽는 위치를 유지합니다. [대화 화면 브라우저 검사](../frontend/tests/e2e/conversation-layout.spec.ts)는 요청 ID의 접기·펼치기, 여러 답변 뒤의 코드·표 표시, 후속 작성 초안의 유지와 제출한 질문의 노출을 확인합니다.
+대화 화면은 상단의 대화 제목, 오른쪽 사용자 발화, 카드 배경 없이 읽는 답변 본문, 하단의 후속 질문 입력창으로 구성합니다. 정상 완료 상태는 스크린리더용으로 제공하고, 부분 답변·실패·근거 누락과 원문 불일치 안내는 화면에 표시합니다. 본문의 작은 인용 번호는 해당 절의 근거를 열며, 답변 아래에는 실제 사용한 고유 근거·TXT 저장·‘답변 정보’를 한 줄의 보조 기능으로 모읍니다. 좁은 화면이나 긴 저장 안내에서는 줄바꿈합니다. 검증 집계와 실행 ID는 기본으로 접힌 ‘답변 정보’에 포함하고, 답변 본문이 없는 실패 등은 기존 ‘요청 정보’에서 실행 ID를 확인합니다. 저장·전송의 실제 결과와 답변의 한계는 상세를 펼치지 않아도 볼 수 있습니다. 코드와 표는 좁은 화면에서도 대화 영역을 넓히지 않고 읽을 수 있어야 합니다. 새 질문을 명시적으로 제출하면 해당 질문으로 이동하지만, 답변이 도착하거나 초안을 입력할 때는 읽는 위치를 유지합니다. [대화 화면 브라우저 검사](../frontend/tests/e2e/conversation-layout.spec.ts)는 실행 ID의 접기·펼치기, 여러 답변 뒤의 코드·표 표시, 후속 작성 초안의 유지와 제출한 질문의 노출을 확인합니다.
 
 사이드바의 대화 검색은 이 탭에 보관한 모든 대화 제목을 대상으로 하며, 검색하거나 대화를 선택해도 요청을 실행하지 않습니다. 답변을 기다릴 때는 답변 자리에서 서버가 보낸 진행 단계를 표시합니다. 긴 답변의 끝이 화면 아래에 있으면 ‘최신 답변’ 버튼을 제공하고, 사용자가 누를 때만 아래로 이동해 입력창으로 포커스를 돌려줍니다. 코드 블록의 ‘코드 복사’는 공백과 개행을 포함한 본문을 그대로 복사합니다. 근거 패널은 출처 유형·확보한 원문 위치·수집 한계와 사용한 발췌를 우선 보여 주고, 연결된 답변·수집 정보·전체 원문은 카드 대신 간결한 펼침 항목으로 제공합니다. 일치 범위는 본문을 읽기 쉬운 중립색으로 강조하며, 비표 자료의 ‘발췌 복사’와 ‘보관 원문 복사’를 구분합니다. 클립보드 사용이 제한된 환경에서는 수동 복사 안내를 표시합니다.
 
@@ -53,6 +53,7 @@ flowchart LR
 | CHAT-05 | epoch 변경 시 기록·초안·당시 근거를 읽기 전용으로 보존한다. 연결 확인 실패는 만료와 구분하고 재확인을 제공한다. 저장소 손상·저장 실패는 안내하고 새 대화를 시작할 수 있다. |
 | CHAT-06 | 수신 중단 뒤 늦게 온 결과가 다음 질문이나 다른 대화를 덮어쓰지 않는다. 최신 실패의 수정은 초안만 채운다. 전달이 이미 실행됐거나 불명인 요청 전체를 재전송하지 않는다. |
 | CHAT-07 | Enter 제출·Shift+Enter 줄바꿈 등 기존 작성 동작을 유지한다. 제출하지 않는 키·마우스 입력이 초안을 지우거나 파일을 제출하지 않는다. |
+| CHAT-08 | 대화 삭제는 확인 후 해당 탭 기록만 제거한다. 진행 중인 대화와 첨부·TXT 저장 중에는 삭제하지 않으며, 마지막 대화를 삭제하면 새 대화를 만든다. 저장 용량 초과 뒤 오래된 대화를 삭제해 저장을 회복할 수 있다. |
 
 ### 파일 선택·첨부 확정
 
@@ -169,6 +170,7 @@ npm --prefix frontend run generate:api
 | API-07 | [명시적 제출과 결과 표시](../frontend/src/App.test.tsx), [실제 API 브라우저 흐름](../frontend/tests/e2e/chat.spec.ts) |
 | CHAT-01·CHAT-02·CHAT-03·CHAT-07 | [예시·정확한 초안·대화 격리·진행 중 탐색·키보드 제출](../frontend/src/App.test.tsx), [대화별 snapshot](../frontend/src/conversations.test.ts) |
 | CHAT-04·CHAT-05·CHAT-06 | [새로고침·만료·실패·중단 UI](../frontend/src/App.test.tsx), [기록 검증·실행 명령 제외](../frontend/src/conversations.test.ts), [실제 브라우저 복원·만료·자동 재전송 방지](../frontend/tests/e2e/workflows.spec.ts) |
+| CHAT-08 | [대화 삭제 확인·취소·진행 중 제한](../frontend/src/components/ConversationSidebar.test.tsx), [저장 실패와 공간 회복](../frontend/src/conversationPersistence.test.ts), [원문 중복 없는 snapshot](../frontend/src/conversations.test.ts) |
 | UPLOAD-01·UPLOAD-02·UPLOAD-03·UPLOAD-04 | [선택·교체·오류·보류 질문의 HTTP 흐름](../frontend/src/attachments/useAttachments.test.tsx), [전송 직전 연결 확인과 초안 보존](../frontend/src/App.test.tsx), [실제 파일·교체·실패 후 재시도](../frontend/tests/e2e/workflows.spec.ts) |
 | UPLOAD-05 | [브라우저 staging·benchmark 경로 입력·해시·세션·revision·operation 검사](../tests/web/test_multi_upload_api.py), [충돌 후 명시적 재검토](../frontend/src/attachments/useAttachments.test.tsx), [용량 한도 파일 교체·동일 내용 재선택·staging 회수 브라우저 회귀](../frontend/tests/e2e/regressions.spec.ts) |
 | ANSWER-01·ANSWER-05·ANSWER-07 | [구조화 본문·부분 답변·검사 의미](../frontend/src/components/AnswerView.test.tsx), [Markdown 원문 복사의 블록 표시·정확한 TXT 다운로드 브라우저 회귀](../frontend/tests/e2e/regressions.spec.ts) |
@@ -183,7 +185,7 @@ npm --prefix frontend run generate:api
 | RUN-02 | [실제 API 성공·제공자 설정 오류](../frontend/tests/e2e/chat.spec.ts), [첨부·복원·다운로드·Slack 흐름](../frontend/tests/e2e/workflows.spec.ts) |
 | RUN-03 | [실제 프로세스 소유권·종료](../tests/app/test_service_manager.py), [정적 제공·API 경로·빌드 누락](../tests/web/test_static_ui.py), [개발 서버 없는 정적 UI와 localhost 외 HTTP의 첨부·질문·다운로드·복원](../frontend/tests/e2e/static.spec.ts), production 프로젝트의 전체 [사용 흐름](../frontend/tests/e2e/workflows.spec.ts)·[접근성 검사](../frontend/tests/e2e/accessibility.spec.ts) |
 
-검사 명령:
+전체 검사는 저장소 루트에서 `uv run --locked python script/verify.py`로 실행합니다. CI도 같은 명령을 사용하며, 기본값에 실제 Chromium 인수 검사가 포함됩니다. 아래 명령은 변경 범위별 개별 검사에 사용합니다.
 
 ```bash
 uv lock --check
@@ -202,11 +204,23 @@ uv run --locked python script/sync_env_example.py --check
 
 변경 범위의 관련 검사부터 실행하고, 웹 런타임 변경의 완료 판정에는 `uv run --locked pytest -q`를 포함한 전체 회귀와 전체 브라우저 인수 항목을 확인합니다. 실패를 재시도나 고정 sleep으로 가리지 않고 원인을 수정합니다. 테스트 수나 화면 캡처만으로 원문·상태 계약의 통과를 대신하지 않습니다.
 
+### 실제 제공자를 사용하는 선택적 브라우저 검사
+
+`test:live`는 [별도 Playwright 설정](../frontend/playwright.live.config.ts)과 [live 시나리오](../frontend/tests/live)를 사용합니다. 기본 `test:e2e`와 `script/verify.py`에는 포함되지 않습니다. 실제 모델·검색·검증 API를 사용하고 비용이 발생하므로 `RUN_LIVE_BROWSER=1`과 이미 실행 중인 앱의 `DOCUMATE_LIVE_BASE_URL`을 모두 지정해야 합니다. 테스트는 서버를 시작하거나 fixture 서버로 바꾸지 않습니다. 실제 제공자를 연결한 정상 서버 또는 진단 서버의 `/app/` URL을 사용합니다. 실제 전송이 발생하지 않도록 테스트 서버의 Slack 토큰을 비워 둡니다.
+
+```bash
+RUN_LIVE_BROWSER=1 DOCUMATE_LIVE_BASE_URL=http://127.0.0.1:8000/app/ npm --prefix frontend run test:live
+```
+
+실제 Chromium에서 정확한 본문 저장과 자연어 표현 변형, 부분 정정 후 새 산출물, 과거 답변의 TXT 저장, 보류 저장의 본문 보충, 인용문 속 전달 명령의 미실행을 확인합니다. 공식 `sorted()` 문서의 두 문장 설명과 코드 예시 금지, `invoice.py`의 10% 할인과 계산 결과 270, 당시 원문 패널·선택 답변 저장·새로고침 복원도 검사합니다. 브라우저 요청에는 관측용 `include_debug=true`만 추가하며 응답과 외부 서비스를 대체하지 않습니다. 다운로드는 실제 파일 바이트를 읽어 서버 응답·artifact 크기·SHA-256과 비교합니다. 모델의 특정 표현을 정답 문장으로 고정하지 않고 정확 복사, 알려진 수치, 상태와 원문 연결을 검증합니다.
+
+live 검사는 한 worker에서 재시도 없이 실행하며 브라우저 시간대는 `Asia/Seoul`입니다. 결과 JSON은 `output/react-live/results.json`, 응답·저장 영수증 첨부와 실패 trace·화면은 `output/react-live/artifacts`에 남습니다. 개별 시나리오는 `--grep`으로 선택할 수 있습니다. 외부 제공자 실패와 모델 해석 실패도 실제 결과로 남기며, 일반 회귀 통과가 이 검사의 성공을 대신하지 않습니다.
+
 ## 5. 대화 기록과 지원 범위
 
-화면에 표시하는 기록은 같은 탭의 `sessionStorage`에 보관하며, 서버의 영속 대화 이력은 제공하지 않습니다. React는 `documate.react.conversations.v1`에 대화 목록·선택 대화·정확한 초안·답변과 당시 근거·저장 결과·Slack 입력·테마를 저장하고 새로고침 후 복원합니다. 실행 중 질문은 중단 기록으로 복원하며 자동 재전송하지 않습니다. 선택 파일의 바이트와 실행 명령은 저장하지 않으므로 파일은 다시 선택해야 합니다.
+화면에 표시하는 기록은 같은 탭의 `sessionStorage`에 보관하며, 서버의 영속 대화 이력은 제공하지 않습니다. React는 `documate.react.conversations`의 version 2 snapshot에 대화 목록·선택 대화·정확한 초안·답변·저장 영수증·Slack 입력·테마를 저장하고 새로고침 후 복원합니다. snapshot 루트의 `sources`는 모든 대화·턴에서 같은 원문을 한 번만 보존하고, 답변은 `sourceIds`로 연결합니다. 직접 TXT 저장 결과는 영수증만 보관하므로 답변 본문과 원문을 복제하지 않습니다. 구 version 1 기록은 자동 변환하거나 삭제하지 않습니다. 자동 복원할 수 없다는 안내와 ‘이전 형식 기록 정리’ 버튼을 제공하며, 사용자가 직접 정리할 때만 구형 key를 삭제합니다. 현재 version 2 기록은 유지하며 대기 중인 저장을 다시 시도합니다. 실행 중 질문은 중단 기록으로 복원하며 자동 재전송하지 않습니다. 선택 파일의 바이트와 실행 명령은 저장하지 않으므로 파일은 다시 선택해야 합니다.
 
-복원한 manifest는 이전 첨부를 표시하는 기록이며, 서버에 다시 확인하기 전까지 새 요청에 사용하지 않습니다. 서버 epoch가 바뀌었으면 기존 기록은 읽기 전용으로 남습니다. 연결 확인 실패는 세션 만료와 구분하며 재확인할 수 있습니다. 저장소를 읽거나 쓰지 못하면 화면에 안내합니다.
+복원한 manifest는 이전 첨부를 표시하는 기록이며, 서버에 다시 확인하기 전까지 새 요청에 사용하지 않습니다. 서버 epoch가 바뀌었으면 기존 기록은 읽기 전용으로 남습니다. 연결 확인 실패는 세션 만료와 구분하며 재확인할 수 있습니다. `ConversationPersistence`는 연속 입력의 저장을 마지막 변경 후 250ms로 합칩니다. 질문 POST 직전, 보류 질문을 기록한 첨부 변경 시작, `pagehide`, 페이지 숨김과 unmount에서는 즉시 저장합니다. 저장소를 읽거나 쓰지 못하면 화면에 안내합니다. 용량 부족 때는 오래된 대화를 삭제해 공간을 회수할 수 있으며 이후 저장이 성공하면 경고가 사라집니다. 삭제는 확인과 취소를 제공하고 진행 중인 대화 및 첨부·TXT 저장 중에는 차단합니다. 탭 기록만 지우므로 서버 작업 취소나 세션 종료를 뜻하지 않습니다.
 
 React 개발 주소와 정적 제공 주소는 origin이 다릅니다. 같은 브라우저라도 이 주소들 사이에서 대화와 초안이 자동으로 이전되지는 않습니다. 탭을 닫은 뒤 복원이나 다른 기기 동기화도 보장하지 않습니다.
 
