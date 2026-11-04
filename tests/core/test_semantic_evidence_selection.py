@@ -77,7 +77,7 @@ def test_extra_context_preserves_ranked_example_over_shorter_redundant_signature
             redundant.id: {entry.requirement_id: {"relevance", "need:signature"}},
         })
 
-    assert [item.id for item in packet] == [broad.id, explanation.id, example.id]
+    assert [item.id for item in packet] == [broad.id, example.id, explanation.id]
     assert ids == {item.id: [entry.requirement_id] for item in packet}
     assert_ranges(packet, budget)
 
@@ -143,7 +143,7 @@ def test_same_document_usage_flow_precedes_overlapping_late_notes():
         requirements_by_evidence={item.id: [entry] for item in candidates},
         semantic_support={item.id: {entry.requirement_id: {"relevance", "need:explanation"}} for item in candidates})
 
-    assert [item.id for item in packet] == [summary.id, intro.id, usage.id]
+    assert [item.id for item in packet] == [intro.id, usage.id, summary.id]
     assert any(workflow in item.excerpt for item in packet)
     assert ids == {item.id: [entry.requirement_id] for item in packet}
     assert_ranges(packet, budget)
@@ -367,7 +367,11 @@ def test_exception_question_keeps_direct_answer_before_generic_introduction(comp
 
     packet, _ = select_evidence_packet(candidates, query=entry.query, budget=budget,
         requirements_by_evidence={item.id: [entry] for item in candidates},
-        semantic_support={item.id: {entry.requirement_id: {"relevance", "need:explanation"}} for item in candidates})
+        # The kind label concerns this task's exception explanation, not any
+        # prose about the API. Selection cannot infer a missing semantic label.
+        semantic_support={item.id: {entry.requirement_id: (
+            {"relevance", "need:explanation"} if error in item.excerpt else {"relevance"}
+        )} for item in candidates})
 
     assert any(error in item.excerpt for item in packet)
     assert_ranges(packet, budget)

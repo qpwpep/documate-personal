@@ -498,6 +498,25 @@ def _doc_passages(item: EvidenceRef, limit: int) -> list[EvidenceRef]:
             for start, end in sorted(spans)]
 
 
+def _compact_doc_passages(item: EvidenceRef, *, limit: int, task: RetrievalTask, query: str) -> list[EvidenceRef]:
+    """Keep complementary parts of an approved range available under a smaller per-item limit.
+
+    These new selections are proposals, not approved replacements for their
+    parent. The exact compact packet still receives its own semantic judgment.
+    """
+    preferred = select_evidence_range(item, limit=limit, query=query, task=task)
+    candidates = _doc_passages(item, limit)
+    result = {preferred.id: preferred}
+    cursor = item.selection.start
+    while pending := [candidate for candidate in candidates if candidate.selection.start >= cursor]:
+        start = min(candidate.selection.start for candidate in pending)
+        selected = max((candidate for candidate in pending if candidate.selection.start == start),
+                       key=lambda candidate: candidate.selection.end)
+        result.setdefault(selected.id, selected)
+        cursor = selected.selection.end
+    return list(result.values())
+
+
 _DOC_CANDIDATES_PER_WINDOW = 8
 _DOC_CANDIDATES_TOTAL = 96
 # These selection limits bound semantic-assessment cost, not provider API capacity.
@@ -671,12 +690,14 @@ def prepare_evidence_candidates(
         primary_pools, remaining_windows = [], []
         for windows in documents.values():
             windows.sort(key=lambda window: window[0].rank)
-            primary_pools.append(windows[0][:2])
-            remaining_windows.extend([windows[0][2:], *windows[1:]])
-        # Reserve each source's requested definition and complementary passage,
-        # then let every remaining raw window contribute before returning to
-        # alternate cuts of one window. Merging those tails by document can
-        # spend its allowance on overlapping signatures and hide late behavior.
+            reserve = (2 if len(windows[0]) > 1 and not contains_evidence_range(
+                windows[0][0].evidence, windows[0][1].evidence) else 1)
+            primary_pools.append(windows[0][:reserve])
+            remaining_windows.extend([*windows[1:], windows[0][reserve:]])
+        # Reserve a source's first context and a complementary second range,
+        # but defer cuts contained in the first range until other retrieved
+        # windows contribute. Repeating the same declaration must not hide a
+        # later parameter description from semantic assessment entirely.
         for allocation in (primary_pools, remaining_windows):
             ordered_candidates = (pool[index] for index in range(max(map(len, allocation), default=0))
                                   for pool in allocation if index < len(pool))
@@ -930,7 +951,7 @@ def select_evidence_packet(
             selected = select_table_evidence(item, limit=budget.max_excerpt_chars, query=query, task=task)
             proposals = [selected] if selected is not None else []
         else:
-            proposals = [select_evidence_range(item, limit=budget.max_excerpt_chars, query=query, task=task)]
+            proposals = _compact_doc_passages(item, limit=budget.max_excerpt_chars, query=query, task=task)
         for selected in proposals:
             doc_proposals.setdefault((selected.id, task.requirement_id), (selected, item, task))
 
@@ -967,6 +988,28 @@ def select_evidence_packet(
         for item in sorted(proposals, key=lambda value: value[1][0].selection.start)
     )
 
+    def new_document_chars(selected: EvidenceRef, task: RetrievalTask) -> int:
+        """Aliases and overlapping windows do not add source information twice."""
+        if selected.element.kind == "table":
+            return len(selected.excerpt)
+        start = selected.selection.start
+        end = selected.selection.end
+        covered = sorted((max(start, old.selection.start), min(end, old.selection.end))
+            for old in packet if task.requirement_id in requirement_ids.get(old.id, [])
+            and old.route == "docs" and old.snapshot.content_hash == selected.snapshot.content_hash
+            and old.snapshot.title == selected.snapshot.title
+            and (old.snapshot.snapshot_id != selected.snapshot.snapshot_id
+                 or old.element.element_id == selected.element.element_id)
+            and old.element.model_copy(update={"element_id": selected.element.element_id}) == selected.element
+            and old.selection.start < end and start < old.selection.end)
+        cursor = start
+        added = 0
+        for left, right in covered:
+            if left > cursor:
+                added += len(selected.element.text[cursor:left].strip())
+            cursor = max(cursor, right)
+        return added + len(selected.element.text[cursor:end].strip())
+
     def reserve_docs(allowances: dict[str, int] | None = None, *, include_context: bool = False) -> None:
         spent: dict[str, int] = {}
         while True:
@@ -984,6 +1027,9 @@ def select_evidence_packet(
                     continue
                 labels = support.get(original.id, {}).get(key, {"relevance"} if semantic_support is None else set())
                 gain = labels - selected_labels.get(key, set())
+                new_chars = new_document_chars(selected, task)
+                if not new_chars and not existing:
+                    continue
                 if allowances is not None and any(
                     other_task.requirement_id == key
                     and labels < support.get(other_original.id, {}).get(key, set())
@@ -1002,21 +1048,16 @@ def select_evidence_packet(
                     continue
                 # A label is an allocation hint, not a proof that this packet
                 # satisfies the task. Exact selected ranges are judged afterward.
-                capacity = remaining if allowances is None else min(
-                    remaining, allowances[key] - spent.get(key, 0))
-                pressure = max(
-                    max(0, cost) / max(1, capacity),
-                    max(0, int(not existing) - len(replaced)) / max(1, budget.max_items - len(packet)),
-                    1 / max(1, budget.max_total_excerpt_chars),
-                )
                 # After label coverage, requested details still precede bare
                 # references. Preserve source rank and document order among
                 # equally supported ranges, including complementary examples.
                 requested_details = {*(f"aspect:{aspect}" for aspect in task.requirement.aspects),
                                      *(f"need:{need}" for need in task.requirement.evidence_needs)}
                 supports_detail = bool(labels & requested_details) if include_context and not gain else False
-                score = (not selected_labels.get(key), bool(gain), len(gain),
-                         len(gain) / pressure, -cost if gain else 0, supports_detail)
+                # Equal support must not favor a short peripheral note over
+                # the source's earlier definition or usage flow. Cost limits
+                # admission; it is not a proxy for semantic usefulness.
+                score = (not selected_labels.get(key), bool(gain), len(gain), supports_detail)
                 if best_score is None or score > best_score:
                     best_score = score
                     best = (selected, original, task, cost, labels)
