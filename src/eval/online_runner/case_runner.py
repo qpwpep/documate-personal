@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from src.app.client import AgentSessionClient, AgentStreamEvent, UploadAPIError, build_agent_payload
 from src.app.uploads import build_upload_sync_request, discard_staged_files
-from src.core.contracts.outcome import AgentCallResult
+from src.core.contracts.outcome import TurnResult
 from src.infra.runtime_paths import get_upload_session_dir
 from src.infra.settings import get_settings
 
@@ -31,7 +31,7 @@ from .response_parser import ParsedResponseData, parse_agent_response
 from .result_builder import build_case_result
 
 
-def _parse_final(body: dict, *, previous: ParsedResponseData, validated_result: AgentCallResult | None = None,
+def _parse_final(body: dict, *, previous: ParsedResponseData, validated_result: TurnResult | None = None,
                  expected_partial_problem: str | None = None) -> ParsedResponseData:
     try:
         return parse_agent_response(body, http_status=previous.http_status, execution_id=previous.execution_id,
@@ -88,7 +88,7 @@ def _run_turn(client: AgentSessionClient, query: str, *,
         parsed.execution_id = observation.execution_id or parsed.execution_id
         elapsed = round(observation.elapsed_ms)
         if event.event == "final_response" and event.result is not None:
-            final = _parse_final(event.data, previous=parsed, validated_result=event.result,
+            final = _parse_final(event.data, previous=parsed, validated_result=event.result.to_turn_result(),
                                  expected_partial_problem=expectation.problem_code if expectation else None)
             final.runtime_errors.extend(parsed.runtime_errors)
             final.response_errors.extend(parsed.response_errors)

@@ -10,7 +10,7 @@ from src.core.contracts.boundary.planner import parse_planner_diagnostic
 from src.core.contracts.boundary.retrieval import normalize_retrieval_diagnostic_observation
 from src.core.contracts.debug import DEBUG_CRITICAL_FIELDS, DEBUG_REQUIRED_FIELDS, DEBUG_SCHEMA_VERSION
 from src.core.contracts.debug import PlannerDiagnostic, RetrievalDiagnostic
-from src.core.contracts.outcome import AgentCallResult, TurnResult
+from src.core.contracts.outcome import TurnResult
 from src.core.contracts.usage import LLMCallRecord
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import RoutingDecision, validate_route_decisions
@@ -170,7 +170,7 @@ def parse_agent_response(
     *,
     http_status: int = 200,
     execution_id: str | None = None,
-    validated_result: AgentCallResult | None = None,
+    validated_result: TurnResult | None = None,
     expected_partial_problem: str | None = None,
 ) -> ParsedResponseData:
     """Parse the complete data object from an SSE final_response event."""

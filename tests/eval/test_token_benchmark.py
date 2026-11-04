@@ -4,13 +4,75 @@ import pytest
 import httpx
 import httpx2
 import json
+import logging
+import sys
+from argparse import Namespace
 from pathlib import Path
 
+from script import benchmark_llm_tokens
 from script.benchmark_llm_tokens import (
     LONG_TEXT, SCENARIOS, compare_runs, ensure_resumable, objective_checks, observe_provider, quality_summary,
     summarize_calls, usage_counters,
 )
 from script.benchmark_decisions_ab import expand_question_instructions, inline_displayed_units, restore_source_lines
+from src.core.answer_schema import AnswerResponse, export_answer_text
+
+
+def test_run_records_typed_execution_and_rejudges_saved_response(tmp_path, monkeypatch):
+    source_root = Path(__file__).resolve().parents[2]
+    monkeypatch.setattr(benchmark_llm_tokens, "ROOT", tmp_path)
+    monkeypatch.setattr(benchmark_llm_tokens, "SCENARIOS", (
+        benchmark_llm_tokens.Scenario("reset", ("exit",), "Confirm the session reset."),
+    ))
+    monkeypatch.setenv("OPENAI_API_KEY", "offline-test-key")
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setattr(logging, "disable", lambda level: None)
+    pages = tmp_path / "frozen_docs"
+    pages.mkdir()
+    for url in benchmark_llm_tokens.DOC_URLS:
+        (pages / url.rsplit("/", 1)[-1]).write_text("<html><p>Frozen documentation.</p></html>", encoding="utf-8")
+
+    judge_inputs = []
+
+    def reply(client, request, *args, **kwargs):
+        assert request.url.path.endswith("/chat/completions")
+        payload = json.loads(request.content)
+        judge_inputs.append(json.loads(payload["messages"][-1]["content"]))
+        quality = {"quality": 1, "groundedness": 1, "instruction_following": 1, "reason": "Reset confirmed."}
+        response_type = httpx2.Response if isinstance(client, httpx2.Client) else httpx.Response
+        return response_type(200, request=request, json={
+            "id": "offline-judge", "object": "chat.completion", "created": 1,
+            "model": payload["model"],
+            "choices": [{"index": 0, "finish_reason": "stop",
+                         "message": {"role": "assistant", "content": json.dumps(quality)}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15,
+                      "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}},
+        })
+
+    monkeypatch.setattr(httpx.Client, "send", reply)
+    monkeypatch.setattr(httpx2.Client, "send", reply)
+    args = Namespace(source_root=source_root, output=tmp_path, variant="typed", repeats=1,
+                     cases=None, rejudge=False, capture_completions=False)
+    benchmark_llm_tokens.run(args)
+
+    turns_path = tmp_path / "typed" / "turns.jsonl"
+    stored_turns = turns_path.read_text(encoding="utf-8")
+    turn = json.loads(stored_turns)
+    assert turn["status"] == turn["result"]["status"] == "completed"
+    assert turn["answer"] == "Chat session has been reset. Start again."
+    assert export_answer_text(AnswerResponse.model_validate(turn["result"]["response"])) == turn["answer"]
+    assert turn["result"]["debug"]["llm_calls"] == []
+    assert turn["actions"] == []
+
+    args.rejudge = True
+    benchmark_llm_tokens.run(args)
+    assert turns_path.read_text(encoding="utf-8") == stored_turns
+    assert len(judge_inputs) == 2
+    assert judge_inputs[0] == judge_inputs[1]
+    assert judge_inputs[1]["turns"][0]["response"] == turn["result"]["response"]
+    summary = json.loads((tmp_path / "typed" / "summary.json").read_text(encoding="utf-8"))
+    assert summary["status_counts"]["completed"] == 1
+    assert summary["judge_success_count"] == 1
 
 
 def test_provider_cache_details_are_subsets_not_extra_tokens():

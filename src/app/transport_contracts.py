@@ -11,7 +11,7 @@ from pydantic_core import core_schema
 
 from src.core.contracts.debug import DebugPayload
 from src.core.answer_schema.wire import SerializedAnswer
-from src.core.contracts.outcome import AgentCallResult
+from src.core.contracts.outcome import AgentCallResult, TurnResult
 from src.core.latency import StageName
 
 
@@ -34,6 +34,14 @@ class AgentResponse(AgentCallResult):
     response: SerializedAnswer | None = None
     trace: str
     debug: DebugPayload | None = None
+
+    def to_turn_result(self) -> TurnResult:
+        """Keep the decoded answer without the HTTP envelope or its serializer."""
+        return TurnResult(
+            status=self.status, response=self.response, answer_id=self.answer_id,
+            message=self.message, problem=self.problem, execution_id=self.execution_id,
+            missing_slots=self.missing_slots,
+        )
 
 
 AgentStreamEventName = Literal[

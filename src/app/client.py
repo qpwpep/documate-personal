@@ -11,8 +11,7 @@ import requests
 from urllib3.exceptions import ReadTimeoutError
 
 from src.app.uploads import UploadStageResult, stage_uploaded_files
-from src.app.transport_contracts import parse_agent_event
-from src.core.contracts.outcome import AgentCallResult
+from src.app.transport_contracts import AgentResponse, parse_agent_event
 from src.core.slack_contract import RecipientInput
 from src.core.uploads import UploadContext, UploadManifest, UploadSyncRequest
 from src.infra.sse import iter_sse_events
@@ -93,7 +92,7 @@ class AgentTransportObservation:
 class AgentStreamEvent:
     event: str
     data: dict[str, Any] = field(default_factory=dict)
-    result: AgentCallResult | None = None
+    result: AgentResponse | None = None
     observation: AgentTransportObservation = field(default_factory=AgentTransportObservation)
 
 

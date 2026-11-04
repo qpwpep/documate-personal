@@ -7,16 +7,25 @@ import socket
 
 import httpx
 import pytest
+import requests
 from langchain_openai import ChatOpenAI
 
-from src.core.answer_schema import AnswerDocument, finalize_answer
+from src.app.transport_contracts import AgentResponse
+from src.core.answer_schema import AnswerDocument, SemanticValidation, finalize_answer, semantic_evidence_fingerprint
+from src.core.answer_schema.source_locations import SOURCE_LOCATION_PLACEHOLDER
+from src.core.answer_schema.wire import SourcedAnswerPayload
+from src.core.contracts.debug import DebugPayload
 from src.core.contracts.outcome import TurnResult
 from src.core.contracts.provenance import AnswerProvenance, AnswerSource
 from src.core.documents import DocumentElement, SourceAnchor, TableCell, TableData, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.core.llm_errors import make_problem
-from src.eval.config_models import BenchmarkCase, CaseOracle
+from src.eval.config_models import BenchmarkCase, BenchmarkConfig, CaseOracle
 from src.eval.judge_llm import LLMJudge
+from src.eval.online_runner.case_runner import run_online_benchmark
+from src.eval.result_models import CaseResult
+from src.infra.chunking import chunk_python_text
+from tests.eval.test_release_eval_contract import _response_payload
 
 
 @pytest.fixture
@@ -128,12 +137,183 @@ def _wire_payload(request):
     return json.loads(next(message["content"] for message in request["messages"] if message["role"] == "user"))
 
 
+@pytest.mark.parametrize(("final_status", "setup_status"), [
+    ("completed", None), ("partial", None), ("needs_input", None),
+    ("completed", "completed"), ("completed", "partial"), ("completed", "needs_input"),
+])
+def test_online_judge_uses_the_same_domain_turns_before_and_after_storage(
+    provider, monkeypatch, tmp_path, final_status, setup_status,
+):
+    body = _response_payload()
+    answer = SourcedAnswerPayload.model_validate(body["response"]).to_answer()
+    case = BenchmarkCase(
+        case_id="online-judge-contract", category="docs_only", query="pandas merge를 설명해 줘.",
+        expected_tools=["tavily_search"], require_official_citation=True,
+        setup_turns=["어떤 문서를 찾아야 해?"] if setup_status else [],
+        setup_forbidden_tools=[[]] if setup_status else None,
+        setup_expectations=[{
+            "status": setup_status,
+            **({"problem_code": "evidence_insufficient"} if setup_status == "partial" else {}),
+        }] if setup_status else None,
+    )
+    fixtures = tmp_path / "cases.jsonl"
+    fixtures.write_text(case.model_dump_json() + "\n", encoding="utf-8")
+    sent = []
+
+    def respond(_adapter, request, **kwargs):
+        response = requests.Response()
+        response.status_code = 200
+        response._content_consumed = True
+        if request.method == "GET":
+            response._content = json.dumps({"epoch": "session", "revision": 0, "files": []}).encode()
+            return response
+        sent.append(json.loads(request.body))
+        status = setup_status if setup_status and len(sent) == 1 else final_status
+        debug = DebugPayload.model_validate(body["debug"])
+        if status == "needs_input":
+            debug.answer_provenance = None
+        envelope = AgentResponse(
+            status=status, response=None if status == "needs_input" else answer,
+            answer_id=None if status == "needs_input" else "answer-1",
+            message="어떤 문서를 설명할까요?" if status == "needs_input" else "",
+            missing_slots=["document"] if status == "needs_input" else [],
+            problem=make_problem("evidence_insufficient", "retrieval") if status == "partial" else None,
+            execution_id="req-1", trace=body["trace"], debug=debug,
+            upload_manifest={"epoch": "session", "revision": 0, "files": []},
+        )
+        response.headers["Content-Type"] = "text/event-stream"
+        response._content = ("event: final_response\ndata: " + envelope.model_dump_json() + "\n\n").encode()
+        return response
+
+    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", respond)
+    run_dir, results, _ = run_online_benchmark(
+        fixtures_path=fixtures, endpoint="http://benchmark.invalid", config=BenchmarkConfig(),
+        config_path=tmp_path / "config.toml", output_root=tmp_path / "runs", track="smoke",
+    )
+    result, = results
+
+    if final_status == "partial":
+        assert result.judge_status == "not_run"
+        assert result.judge_status_reason == "product_failure"
+        assert result.judge_input_complete is None
+        assert result.composite_quality_score is None
+        assert provider == []
+    else:
+        assert result.judge_status == "succeeded", result.judge_input_issues
+        assert result.judge_input_complete is True
+        assert result.composite_quality_score is not None
+        assert len(provider) == 1
+        judge_payload = _wire_payload(provider[0])
+        assert judge_payload["turn_result"]["status"] == final_status
+        if setup_status:
+            assert judge_payload["conversation"][0]["turn_result"]["status"] == setup_status
+    if final_status == "completed":
+        assert result.release_pass is True, result.gate_failures
+    assert len(sent) == 1 + bool(setup_status)
+    reloaded = CaseResult.model_validate_json((run_dir / "raw_results.jsonl").read_text(encoding="utf-8"))
+    assert type(result.turn_result) is TurnResult
+    assert result.turn_result.model_dump(mode="json") == reloaded.turn_result.model_dump(mode="json")
+    for live, saved in zip(result.scenario_turns, reloaded.scenario_turns, strict=True):
+        expected_status = setup_status if live.role == "setup" else final_status
+        assert type(live.turn_result) is TurnResult
+        assert live.turn_result.model_dump(mode="json") == saved.turn_result.model_dump(mode="json")
+        assert live.turn_result.status == expected_status
+        assert live.turn_result.execution_id == "req-1"
+        assert live.turn_result.message == ("어떤 문서를 설명할까요?" if expected_status == "needs_input" else "")
+        assert live.turn_result.missing_slots == (["document"] if expected_status == "needs_input" else [])
+        if expected_status == "partial":
+            assert live.turn_result.problem.code == "evidence_insufficient"
+        else:
+            assert live.turn_result.problem is None
+        assert live.upload_manifest == saved.upload_manifest
+        assert live.upload_manifest.epoch == "session"
+        assert live.debug == saved.debug
+        assert live.trace == saved.trace == body["trace"]
+        if live.response is not None:
+            assert live.turn_result.response == answer
+            assert live.turn_result.answer_id == "answer-1"
+
+
 def test_judge_input_rejects_unsupported_internal_values():
     inputs, _ = _inputs()
     inputs["planner_diagnostics"] = {"unexpected": object()}
 
     with pytest.raises(TypeError, match="Unsupported judge input value: object"):
         LLMJudge.build_case_payload(**inputs)
+
+
+@pytest.mark.parametrize("assessed_explanation", [False, True])
+def test_verified_source_location_is_observed_without_a_fake_grounding_probability(
+    provider, monkeypatch, tmp_path, assessed_explanation,
+):
+    text = "value = 1\n"
+    parsed = chunk_python_text(path="sample.py", text=text, source_content=text.encode(),
+                               source_uri="upload:///sample.py", chunk_size=2000, chunk_overlap=0).parsed
+    evidence = build_evidence(snapshot=parsed.snapshot, element=parsed.elements[0])
+    answer = finalize_answer(AnswerDocument.model_validate({"blocks": [
+        {"type": "paragraph", "content": [{"text": "value에는 1을 저장합니다.", "basis": "source", "refs": [evidence.id]}]},
+        {"type": "paragraph", "content": [{"text": SOURCE_LOCATION_PLACEHOLDER, "basis": "source", "refs": [evidence.id],
+          "source_location": {"ref": evidence.id, "start": 0, "end": len(text)}}]},
+    ]}), [evidence])
+    if assessed_explanation:
+        answer.semantic_validation = SemanticValidation(
+            content_hash=answer.content_hash, evidence_fingerprint=semantic_evidence_fingerprint(answer.citations),
+            model="fixture", threshold=0.8, checks=[
+                {"name": "request_fulfilled", "probability": 0.99},
+                {"name": "grounded", "unit_id": "b0.content.0", "probability": 0.99},
+            ],
+        )
+    debug = DebugPayload(
+        tool_calls=["upload_search"], tool_call_count=1, llm_calls=[],
+        observed_hits=[SearchHit(evidence=evidence, rank=1, score=RetrievalScore(
+            metric="source_symbol", direction="higher")).model_dump(mode="json")],
+        answer_provenance=AnswerProvenance(body_kind="compose", response_hash=answer.content_hash,
+                                           evidence_packet=[evidence]),
+        execution_evidence={"schema_version": 1, "execution_id": "location-execution", "status": "complete", "events": [
+            {"sequence": index, "invocation_id": "search", "tool_name": "upload_search", "phase": phase}
+            for index, phase in enumerate(("started", "succeeded"), 1)
+        ]},
+    )
+
+    def respond(_adapter, request, **kwargs):
+        response = requests.Response()
+        response.status_code = 200
+        response._content_consumed = True
+        if request.method == "GET":
+            response._content = json.dumps({"epoch": "session", "revision": 0, "files": []}).encode()
+        else:
+            envelope = AgentResponse(
+                status="completed", response=answer, execution_id="location-execution", debug=debug,
+                trace="Execution ID: location-execution",
+                upload_manifest={"epoch": "session", "revision": 0, "files": []},
+            )
+            response.headers["Content-Type"] = "text/event-stream"
+            response._content = ("event: final_response\ndata: " + envelope.model_dump_json() + "\n\n").encode()
+        return response
+
+    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", respond)
+    case = BenchmarkCase(case_id="location-statistics", category="rag_only",
+                         query="value의 값과 원본 줄 위치를 설명해줘.", expected_tools=["upload_search"],
+                         require_local_citation=True)
+    fixture = tmp_path / "cases.jsonl"
+    fixture.write_text(case.model_dump_json() + "\n", encoding="utf-8")
+    run_dir, results, _ = run_online_benchmark(
+        fixtures_path=fixture, endpoint="http://location.invalid", config=BenchmarkConfig(),
+        config_path=tmp_path / "config.toml", output_root=tmp_path / "runs", track="smoke",
+    )
+    result, = results
+    assert result.judge_status == "succeeded", result.judge_input_issues
+    assert result.unchecked_unit_count == (0 if assessed_explanation else 1)
+    assert result.response.checks[1].support_status == "verified_location"
+    assert result.response.content.blocks[1].content[0].text == "sample.py:1"
+    assert len(provider) == 1
+    judge_payload = _wire_payload(provider[0])
+    assert judge_payload["content_stats"]["unchecked_unit_count"] == result.unchecked_unit_count
+    report = result.response.semantic_validation
+    assert report is None or all(check.unit_id != "b1.content.0" for check in report.checks)
+    saved = CaseResult.model_validate_json((run_dir / "raw_results.jsonl").read_text(encoding="utf-8"))
+    assert saved.unchecked_unit_count == result.unchecked_unit_count
+    assert saved.response.checks[1].support_status == "verified_location"
 
 
 def test_repeated_large_source_is_sent_once_as_exact_selected_evidence(provider):

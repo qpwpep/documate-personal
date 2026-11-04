@@ -357,7 +357,7 @@ def stage_totals(turns: list[dict]) -> dict:
     tokens = {}
     for turn in turns:
         debug = turn["result"]["debug"]
-        for stage, elapsed in debug.get("latency_breakdown", {}).get("stage_totals_ms", {}).items():
+        for stage, elapsed in (debug.get("latency_breakdown") or {}).get("stage_totals_ms", {}).items():
             if elapsed is not None:
                 latencies[stage] = latencies.get(stage, 0) + elapsed
         for call in debug.get("llm_calls", []):
@@ -465,7 +465,7 @@ def run(args) -> None:
     from dotenv import load_dotenv
     load_dotenv(ROOT / ".env", override=False)
     from src.app.agent_manager import AgentFlowManager
-    from src.core.answer_schema import AnswerResponse, export_answer_text
+    from src.core.answer_schema import export_answer_text
     from src.infra.settings import AppSettings
     settings = AppSettings(_env_file=ROOT / ".env", verbose=False, slack_bot_token=None)
     if not settings.openai_api_key:
@@ -543,19 +543,21 @@ def run(args) -> None:
                             result = manager.run_agent_flow(query)
                     elapsed = round((time.perf_counter() - started) * 1000)
                     capture_write_ms = round(sum(call["capture_write_ms"] for call in calls), 3)
-                    if result.get("debug", {}).get("llm_calls") and not calls:
+                    if result.debug.llm_calls and not calls:
                         raise RuntimeError("Provider observer missed actual model calls; discard this run")
                     product_calls.extend(calls)
-                    response = AnswerResponse.model_validate(result["response"]) if result.get("response") else None
-                    turn = {**context, "turn": index, "query": query, "status": result["status"],
-                            "answer": export_answer_text(response) if response else result.get("message", ""),
+                    response = result.outcome.response
+                    turn = {**context, "turn": index, "query": query, "status": result.outcome.status,
+                            "answer": export_answer_text(response) if response else result.outcome.message,
                             "actions": [action.model_dump(mode="json") for action in response.actions] if response else [],
                             "latency_ms": elapsed, "capture_write_ms": capture_write_ms,
                             "latency_excluding_capture_ms": round(max(0, elapsed - capture_write_ms), 3),
-                            "summary": summarize_calls(calls), "result": result}
+                            "summary": summarize_calls(calls),
+                            "result": {**result.outcome.model_dump(mode="json"),
+                                       "debug": result.debug.model_dump(mode="json")}}
                     turns.append(turn)
                     append_json(run_dir / "turns.jsonl", turn)
-                    print(json.dumps({**context, "turn": index, "status": result["status"], "latency_ms": elapsed,
+                    print(json.dumps({**context, "turn": index, "status": result.outcome.status, "latency_ms": elapsed,
                                       "calls": len(calls), "input_tokens": turn["summary"]["input_tokens"]}), flush=True)
                 with observe_provider(run_dir / "provider_calls.jsonl", {**context, "phase": "judge"}) as judge_calls:
                     try:
