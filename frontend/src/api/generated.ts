@@ -157,6 +157,28 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AcknowledgeBody
+         * @description Confirm a complete instruction without creating a deliverable document.
+         */
+        AcknowledgeBody: {
+            /**
+             * Evidence Ids
+             * @default []
+             */
+            evidence_ids: string[];
+            /**
+             * Kind
+             * @default acknowledge
+             * @constant
+             */
+            kind: "acknowledge";
+        };
+        /** ActionContract */
+        ActionContract: {
+            save_text: components["schemas"]["ActionRequest"];
+            slack_notify: components["schemas"]["ActionRequest"];
+        };
         /** ActionReceipt */
         ActionReceipt: {
             /** @default null */
@@ -207,6 +229,21 @@ export interface components {
              * @default null
              */
             verification: ("verified" | "failed" | "unverifiable") | null;
+        };
+        /** ActionRequest */
+        ActionRequest: {
+            /**
+             * Evidence Ids
+             * @default []
+             */
+            evidence_ids: string[];
+            /**
+             * Intent
+             * @description This turn's action instruction only. For a pending request, not_requested with no evidence means no change; the server preserves prior authorization and completion. A requested TXT file is save_text; merely reformatting text on screen is not saving.
+             * @default not_requested
+             * @enum {string}
+             */
+            intent: "requested" | "forbidden" | "not_requested" | "unresolved";
         };
         /** ActionResults */
         ActionResults: {
@@ -268,6 +305,37 @@ export interface components {
              * @default null
              */
             upload_manifest: components["schemas"]["UploadManifest"] | null;
+        };
+        /**
+         * AnswerContract
+         * @description Content, presentation and soft preferences stay independent of retrieval.
+         */
+        AnswerContract: {
+            /**
+             * @description Explicit user constraint on the kinds of source elements the answer may cite. Null imposes no kind restriction for a new request and preserves the existing scope for a pending request. A replacement requires current user evidence scoped to answer.citation_scope.
+             * @default null
+             */
+            citation_scope: components["schemas"]["CitationScope"] | null;
+            /**
+             * Content
+             * @default []
+             */
+            content: components["schemas"]["ContentRequirement"][];
+            /**
+             * Format
+             * @default []
+             */
+            format: (components["schemas"]["LayoutRequirement"] | components["schemas"]["LineCountRequirement"])[];
+            /**
+             * Preferences
+             * @default []
+             */
+            preferences: string[];
+            /**
+             * Sentence Counts
+             * @default []
+             */
+            sentence_counts: components["schemas"]["SentenceCountRequirement"][];
         };
         /** AnswerDocument */
         AnswerDocument: {
@@ -337,6 +405,14 @@ export interface components {
              */
             version: 1;
         };
+        /** AnswerReference */
+        AnswerReference: {
+            /**
+             * Ref
+             * @enum {string}
+             */
+            ref: "previous" | "pending";
+        };
         /**
          * AnswerSource
          * @description The resolved parent's complete adopted citation set, not its old search candidates.
@@ -356,6 +432,29 @@ export interface components {
         Body_stage_browser_upload_sessions__session_id__uploads_staging_post: {
             /** File */
             file: string;
+        };
+        /** BoundAnswerReference */
+        BoundAnswerReference: {
+            /**
+             * Ref
+             * @enum {string}
+             */
+            ref: "previous" | "pending";
+            /** Response Hash */
+            response_hash: string;
+        };
+        /** BoundInputText */
+        BoundInputText: {
+            /** Content Hash */
+            content_hash: string;
+            /** End */
+            end: number;
+            /** Start */
+            start: number;
+            /** Text */
+            text: string;
+            /** Turn Id */
+            turn_id: string;
         };
         /** BrowserUploadAddition */
         BrowserUploadAddition: {
@@ -390,6 +489,22 @@ export interface components {
         CapturedAnswerSource: {
             element: components["schemas"]["DocumentElement"];
             snapshot: components["schemas"]["DocumentSnapshot"];
+        };
+        /**
+         * CitationScope
+         * @description User-selected source element kinds permitted in actual answer citations.
+         */
+        CitationScope: {
+            /**
+             * Allowed Kinds
+             * @description Allowed kinds of cited source elements, not output layout or file extensions. For code-only citations use ['code']; do not repeat this constraint as custom content. Retrieval route and file selection remain in retrieval requirements.
+             */
+            allowed_kinds: ("heading" | "paragraph" | "list" | "code" | "table" | "image")[];
+            /**
+             * Evidence Ids
+             * @default []
+             */
+            evidence_ids: string[];
         };
         /**
          * ClientConfig
@@ -436,6 +551,26 @@ export interface components {
              */
             type: "code";
         };
+        /** ComposeBody */
+        ComposeBody: {
+            /**
+             * Evidence Ids
+             * @default []
+             */
+            evidence_ids: string[];
+            /**
+             * Instruction
+             * @description Describe only the requested operation on the displayed body. Put file saving and message delivery in actions, not in this instruction. Preserve words about saving or sending when they are quoted payload or the subject being explained.
+             * @default
+             */
+            instruction: string;
+            /**
+             * Kind
+             * @default compose
+             * @constant
+             */
+            kind: "compose";
+        };
         /**
          * ConfiguredRecipient
          * @description An explicit reference to the exact recipient offered by this request's UI.
@@ -457,6 +592,37 @@ export interface components {
              * @enum {string}
              */
             state: "configured";
+        };
+        /** ContentRequirement */
+        ContentRequirement: {
+            /**
+             * Description
+             * @description An independently requested content subject and its scope; mode carries the required/forbidden polarity. Describe prohibited content itself, such as 'explanatory prose in the source text', not 'do not include explanation'. Exact copy already guarantees no changes or additions: do not create content conditions for 'copy unchanged' or 'do not add a new explanation'. Preserve conditions on the selected text itself, such as required topics or prohibited original content. Do not restate saving, sending, or the body operation as a content condition.
+             * @default
+             */
+            description: string;
+            /**
+             * Evidence Ids
+             * @default []
+             */
+            evidence_ids: string[];
+            /**
+             * Kind
+             * @description Semantic content only. code means program code, code_example means an illustrative code example, and example means an illustration of any kind. A code_block is layout and can contain logs or input text. Do not repeat the body transformation, action, line count or layout as custom content. A table prohibition belongs to format.table, not comparison or custom.
+             * @enum {string}
+             */
+            kind: "code" | "code_example" | "example" | "comparison" | "options_summary" | "explanation" | "procedure" | "custom";
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "required" | "forbidden" | "preferred";
+            /**
+             * Replaces
+             * @description For a change to one pending content condition, copy its offered ref from pending_request.confirmed_facts.answer.content. Null adds an independent condition. Never invent a ref; it is valid only for the offered request revision.
+             * @default null
+             */
+            replaces: string | null;
         };
         /**
          * ContentUnit
@@ -484,6 +650,48 @@ export interface components {
             source_location: components["schemas"]["SourceLocationReference"] | null;
             /** Text */
             text: string;
+        };
+        /**
+         * ContractEvidence
+         * @description An interpreted user clause, not retrieved evidence or an execution permit.
+         */
+        ContractEvidence: {
+            /** Id */
+            id: string;
+            /**
+             * Interpretation
+             * @enum {string}
+             */
+            interpretation: "instruction" | "negation" | "mention" | "quotation" | "correction" | "reference";
+            /** Quote */
+            quote: string;
+            /**
+             * Scope
+             * @description The affected field or subject, e.g. actions.save_text or answer.content.code_example.
+             */
+            scope: string;
+            /** Turn Id */
+            turn_id: string;
+        };
+        /** CopyAnswerBody */
+        CopyAnswerBody: {
+            /**
+             * Kind
+             * @default copy_answer
+             * @constant
+             */
+            kind: "copy_answer";
+            source: components["schemas"]["BoundAnswerReference"];
+        };
+        /** CopyInputBody */
+        CopyInputBody: {
+            /**
+             * Kind
+             * @default copy_input
+             * @constant
+             */
+            kind: "copy_input";
+            source: components["schemas"]["BoundInputText"];
         };
         /**
          * DebugPayload
@@ -540,7 +748,7 @@ export interface components {
             route_decisions: components["schemas"]["RoutingDecision"][];
             /**
              * Schema Version
-             * @default 14
+             * @default 15
              */
             schema_version: number;
             /**
@@ -550,8 +758,86 @@ export interface components {
             tool_call_count: number;
             /** Tool Calls */
             tool_calls: string[];
+            validation_diagnostics: components["schemas"]["ValidationDiagnostics"];
             /** Validation Events */
             validation_events: string[];
+        };
+        /** DiagnosticCandidate */
+        DiagnosticCandidate: {
+            /** Context Evidence Ids */
+            context_evidence_ids: string[];
+            /** Evidence Id */
+            evidence_id: string;
+            /** Requirement Id */
+            requirement_id: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "candidate" | "context";
+            /** Supporting Evidence Ids */
+            supporting_evidence_ids: string[];
+        };
+        /** DiagnosticPacket */
+        DiagnosticPacket: {
+            /** Evidence Ids */
+            evidence_ids: string[];
+            /** Failed Requirement Ids */
+            failed_requirement_ids: string[];
+            /** Fingerprint */
+            fingerprint: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "normal" | "compact" | "used";
+            /** Requirement Map */
+            requirement_map: {
+                [key: string]: string[];
+            };
+        };
+        /** DiagnosticPredicate */
+        DiagnosticPredicate: {
+            /**
+             * Cached
+             * @default false
+             */
+            cached: boolean;
+            /** Criterion */
+            criterion: string;
+            /**
+             * Evidence Id
+             * @default null
+             */
+            evidence_id: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Packet Mode
+             * @default null
+             */
+            packet_mode: ("normal" | "compact" | "used") | null;
+            /**
+             * Probability
+             * @default null
+             */
+            probability: number | null;
+            /**
+             * Requirement Id
+             * @default null
+             */
+            requirement_id: string | null;
+            /**
+             * Status
+             * @default pending
+             * @enum {string}
+             */
+            status: "pending" | "evaluated" | "refused";
+            /**
+             * Unit Id
+             * @default null
+             */
+            unit_id: string | null;
         };
         /**
          * DocsSearchProviderRequest
@@ -708,6 +994,31 @@ export interface components {
              */
             state: "explicit";
         };
+        /** ExtractBody */
+        ExtractBody: {
+            /**
+             * Evidence Ids
+             * @default []
+             */
+            evidence_ids: string[];
+            /**
+             * Instruction
+             * @description Describe only the requested operation on the displayed body. Put file saving and message delivery in actions, not in this instruction. Preserve words about saving or sending when they are quoted payload or the subject being explained.
+             * @default
+             */
+            instruction: string;
+            /**
+             * Kind
+             * @default extract
+             * @constant
+             */
+            kind: "extract";
+            /**
+             * Requirement Ids
+             * @default []
+             */
+            requirement_ids: string[];
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -726,6 +1037,22 @@ export interface components {
              * @enum {string}
              */
             type: "heading";
+        };
+        /** InputTextReference */
+        InputTextReference: {
+            /**
+             * Occurrence
+             * @description One-based occurrence, only when the user's selection identifies it. Null means the quote must be unique.
+             * @default null
+             */
+            occurrence: number | null;
+            /**
+             * Quote
+             * @description Exact payload text to copy or transform. Exclude surrounding quotation delimiters unless those marks themselves are part of the requested payload. Never paraphrase or normalize the source.
+             */
+            quote: string;
+            /** Turn Id */
+            turn_id: string;
         };
         /** LLMCallRecord */
         LLMCallRecord: {
@@ -905,6 +1232,54 @@ export interface components {
              */
             upload_retriever_build_ms: number | null;
         };
+        /** LayoutRequirement */
+        LayoutRequirement: {
+            /**
+             * Evidence Ids
+             * @default []
+             */
+            evidence_ids: string[];
+            /**
+             * Kind
+             * @description Explicit layout. inline_code means code spans within prose or an inline CodeBlock; code_block means a separate block. Preserve which content needs the format in the body instruction. No table means table/forbidden, not comparison or custom content. Layouts have no numeric value.
+             * @enum {string}
+             */
+            kind: "code_block" | "inline_code" | "ordered_list" | "list" | "table" | "headings";
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "required" | "forbidden" | "preferred";
+            /**
+             * Value
+             * @default null
+             */
+            value: null;
+        };
+        /** LineCountRequirement */
+        LineCountRequirement: {
+            /**
+             * Evidence Ids
+             * @default []
+             */
+            evidence_ids: string[];
+            /**
+             * Kind
+             * @default line_count
+             * @constant
+             */
+            kind: "line_count";
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "required" | "forbidden" | "preferred";
+            /**
+             * Value
+             * @description The explicit number of nonempty body lines. Never null.
+             */
+            value: number;
+        };
         /** ListBlock */
         ListBlock: {
             /** Items */
@@ -920,6 +1295,22 @@ export interface components {
              */
             type: "list";
         };
+        /** MissingInformation */
+        MissingInformation: {
+            /** Question */
+            question: string;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "not_provided" | "unknown_id" | "quote_not_found" | "ambiguous_scope" | "unclear";
+            /**
+             * Slot
+             * @description The actual missing user fact. save_intent/slack_intent mean whether to execute, not filename, path or destination. Save filenames are generated by the server and require no user input. A pure prohibition needs no subject or destination.
+             * @enum {string}
+             */
+            slot: "subject" | "input_reference" | "answer_reference" | "pending_request" | "save_intent" | "slack_intent" | "slack_destination";
+        };
         /** OmittedRecipient */
         OmittedRecipient: {
             /**
@@ -927,6 +1318,19 @@ export interface components {
              * @enum {string}
              */
             state: "omitted";
+        };
+        /** OrdinalAnswerReference */
+        OrdinalAnswerReference: {
+            /**
+             * Ordinal
+             * @description The one-based answer position explicitly requested by the user. Preserve it even when no offered answer has this position; never substitute previous.
+             */
+            ordinal: number;
+            /**
+             * Ref
+             * @constant
+             */
+            ref: "ordinal";
         };
         /** ParagraphBlock */
         ParagraphBlock: {
@@ -1053,6 +1457,51 @@ export interface components {
             kind: "channel" | "user" | "email";
             /** Value */
             value: string;
+        };
+        /**
+         * RequestContract
+         * @description Immutable server-bound facts; execution readiness is derived, never model asserted.
+         */
+        RequestContract: {
+            actions: components["schemas"]["ActionContract"];
+            answer: components["schemas"]["AnswerContract"];
+            /** Body */
+            body: components["schemas"]["ComposeBody"] | components["schemas"]["AcknowledgeBody"] | components["schemas"]["CopyInputBody"] | components["schemas"]["TransformInputBody"] | components["schemas"]["CopyAnswerBody"] | components["schemas"]["TransformAnswerBody"] | components["schemas"]["ExtractBody"] | components["schemas"]["UnresolvedBody"];
+            /**
+             * Body Request
+             * @default null
+             */
+            body_request: components["schemas"]["ComposeBody"] | components["schemas"]["AcknowledgeBody"] | components["schemas"]["WireCopyInputBody"] | components["schemas"]["WireTransformInputBody"] | components["schemas"]["WireCopyAnswerBody"] | components["schemas"]["WireTransformAnswerBody"] | components["schemas"]["ExtractBody"] | components["schemas"]["UnresolvedBody"] | null;
+            /**
+             * Evidence
+             * @default []
+             */
+            evidence: components["schemas"]["ContractEvidence"][];
+            /**
+             * Missing Info
+             * @default []
+             */
+            missing_info: components["schemas"]["MissingInformation"][];
+            /**
+             * Relation
+             * @default new
+             * @enum {string}
+             */
+            relation: "new" | "correction" | "supplement" | "cancel";
+            /** Request Id */
+            request_id: string;
+            /**
+             * Revision
+             * @default 1
+             */
+            revision: number;
+            /** Slack Recipient */
+            slack_recipient: components["schemas"]["OmittedRecipient"] | components["schemas"]["ExplicitRecipient"] | components["schemas"]["ConfiguredRecipient"] | components["schemas"]["UnresolvedRecipient"];
+            /**
+             * Target Request Id
+             * @default null
+             */
+            target_request_id: string | null;
         };
         /** ResponseIssue */
         ResponseIssue: {
@@ -1524,6 +1973,39 @@ export interface components {
             model: string;
             /** Threshold */
             threshold: number;
+        };
+        /** SentenceCountRequirement */
+        SentenceCountRequirement: {
+            /**
+             * Evidence Ids
+             * @default []
+             */
+            evidence_ids: string[];
+            /**
+             * Kind
+             * @default sentence_count
+             * @constant
+             */
+            kind: "sentence_count";
+            /**
+             * Maximum
+             * @default null
+             */
+            maximum: number | null;
+            /** Minimum */
+            minimum: number;
+            /**
+             * Mode
+             * @default required
+             * @enum {string}
+             */
+            mode: "required" | "preferred";
+            /**
+             * Scope
+             * @description The target and content covered by this quota; null means the whole body. Split per-target quotas into separate entries. True and False explanations for the same target are distinct scopes.
+             * @default null
+             */
+            scope: string | null;
         };
         /** SlackDefault */
         SlackDefault: {
@@ -2002,6 +2484,58 @@ export interface components {
              */
             status: "complete" | "incomplete" | "unavailable";
         };
+        /** TransformAnswerBody */
+        TransformAnswerBody: {
+            /**
+             * Change Requirement
+             * @description required means the user requests an actual change to the displayed body or its structure, such as a further rewrite, replacement or translation. if_needed means the user requests a target condition and permits the original body when it already satisfies that condition, such as ensuring one line or a specified layout. Delivery alone is never a body change.
+             * @enum {string}
+             */
+            change_requirement: "required" | "if_needed";
+            /**
+             * Evidence Ids
+             * @default []
+             */
+            evidence_ids: string[];
+            /**
+             * Instruction
+             * @description Describe only the requested operation on the displayed body. Put file saving and message delivery in actions, not in this instruction. Preserve words about saving or sending when they are quoted payload or the subject being explained.
+             */
+            instruction: string;
+            /**
+             * Kind
+             * @default transform_answer
+             * @constant
+             */
+            kind: "transform_answer";
+            source: components["schemas"]["BoundAnswerReference"];
+        };
+        /** TransformInputBody */
+        TransformInputBody: {
+            /**
+             * Change Requirement
+             * @description required means the user requests an actual change to the displayed body or its structure, such as a further rewrite, replacement or translation. if_needed means the user requests a target condition and permits the original body when it already satisfies that condition, such as ensuring one line or a specified layout. Delivery alone is never a body change.
+             * @enum {string}
+             */
+            change_requirement: "required" | "if_needed";
+            /**
+             * Evidence Ids
+             * @default []
+             */
+            evidence_ids: string[];
+            /**
+             * Instruction
+             * @description Describe only the requested operation on the displayed body. Put file saving and message delivery in actions, not in this instruction. Preserve words about saving or sending when they are quoted payload or the subject being explained.
+             */
+            instruction: string;
+            /**
+             * Kind
+             * @default transform_input
+             * @constant
+             */
+            kind: "transform_input";
+            source: components["schemas"]["BoundInputText"];
+        };
         /** UnitCheck */
         UnitCheck: {
             /** Issues */
@@ -2019,6 +2553,23 @@ export interface components {
             support_status: "not_evaluated" | "exact_match" | "verified_location" | "unsupported";
             /** Unit Id */
             unit_id: string;
+        };
+        /** UnresolvedBody */
+        UnresolvedBody: {
+            /**
+             * Instruction
+             * @description Describe only the requested operation on the displayed body. Put file saving and message delivery in actions, not in this instruction. Preserve words about saving or sending when they are quoted payload or the subject being explained.
+             * @default
+             */
+            instruction: string;
+            /**
+             * Kind
+             * @default unresolved
+             * @constant
+             */
+            kind: "unresolved";
+            /** Question */
+            question: string;
         };
         /** UnresolvedRecipient */
         UnresolvedRecipient: {
@@ -2113,6 +2664,20 @@ export interface components {
             /** Source */
             source: string;
         };
+        /** ValidationDiagnostics */
+        ValidationDiagnostics: {
+            /** Evidence */
+            evidence: {
+                [key: string]: components["schemas"]["EvidenceRef"];
+            };
+            /** Observations */
+            observations: components["schemas"]["ValidationObservation"][];
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -2125,6 +2690,165 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /** ValidationObservation */
+        ValidationObservation: {
+            /** Attempt */
+            attempt: number;
+            /** @default null */
+            body: components["schemas"]["AnswerDocument"] | null;
+            /**
+             * Body Hash
+             * @default null
+             */
+            body_hash: string | null;
+            /** Candidates */
+            candidates: components["schemas"]["DiagnosticCandidate"][];
+            /** Failed Requirement Ids */
+            failed_requirement_ids: string[];
+            /**
+             * Failure Type
+             * @default null
+             */
+            failure_type: string | null;
+            /** Local Failed Unit Ids */
+            local_failed_unit_ids: string[];
+            /** Local Failures */
+            local_failures: string[];
+            /** Model */
+            model: string;
+            /** Packets */
+            packets: components["schemas"]["DiagnosticPacket"][];
+            /** Predicates */
+            predicates: components["schemas"]["DiagnosticPredicate"][];
+            request_contract: components["schemas"]["RequestContract"] | null;
+            /**
+             * Revision
+             * @enum {string}
+             */
+            revision: "preparation" | "generated" | "filtered";
+            /**
+             * Selected Packet Mode
+             * @default null
+             */
+            selected_packet_mode: ("normal" | "compact") | null;
+            /** Semantic Tasks */
+            semantic_tasks: components["schemas"]["RetrievalTask"][];
+            /** Sequence */
+            sequence: number;
+            /**
+             * Skip Reason
+             * @default null
+             */
+            skip_reason: string | null;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "pre_synthesis_validation" | "post_synthesis_validation";
+            /**
+             * Status
+             * @default started
+             * @enum {string}
+             */
+            status: "started" | "completed" | "skipped" | "failed";
+            /** Tasks */
+            tasks: components["schemas"]["RetrievalTask"][];
+            /** Terminal Failed Requirement Ids */
+            terminal_failed_requirement_ids: string[];
+            /** Threshold */
+            threshold: number;
+            /** User Input */
+            user_input: string;
+        };
+        /**
+         * WireCopyAnswerBody
+         * @description Reuse a displayed answer including its existing sources and limitations.
+         *
+         *     TXT serialization and inclusion of existing citations are server export
+         *     behavior, not transformations of the answer's wording or content. A newly
+         *     requested displayed layout uses transform_answer even if wording stays literal.
+         */
+        WireCopyAnswerBody: {
+            /**
+             * Kind
+             * @default copy_answer
+             * @constant
+             */
+            kind: "copy_answer";
+            /** Source */
+            source: components["schemas"]["AnswerReference"] | components["schemas"]["OrdinalAnswerReference"];
+        };
+        /**
+         * WireCopyInputBody
+         * @description Copy literal input with unchanged layout; a newly requested layout uses transform_input.
+         */
+        WireCopyInputBody: {
+            /**
+             * Kind
+             * @default copy_input
+             * @constant
+             */
+            kind: "copy_input";
+            source: components["schemas"]["InputTextReference"];
+        };
+        /**
+         * WireTransformAnswerBody
+         * @description Change the actual answer body, for example its language, length or claims.
+         *
+         *     Saving the existing answer with its sources/limitations is copy_answer.
+         */
+        WireTransformAnswerBody: {
+            /**
+             * Change Requirement
+             * @description required means the user requests an actual change to the displayed body or its structure, such as a further rewrite, replacement or translation. if_needed means the user requests a target condition and permits the original body when it already satisfies that condition, such as ensuring one line or a specified layout. Delivery alone is never a body change.
+             * @enum {string}
+             */
+            change_requirement: "required" | "if_needed";
+            /**
+             * Evidence Ids
+             * @default []
+             */
+            evidence_ids: string[];
+            /**
+             * Instruction
+             * @description The requested change to the answer's actual wording, language, structure or claims. TXT serialization or including existing sources/limitations is not a body change; use copy_answer. Describe only the requested operation on the displayed body. Put file saving and message delivery in actions, not in this instruction. Preserve words about saving or sending when they are quoted payload or the subject being explained.
+             */
+            instruction: string;
+            /**
+             * Kind
+             * @default transform_answer
+             * @constant
+             */
+            kind: "transform_answer";
+            /** Source */
+            source: components["schemas"]["AnswerReference"] | components["schemas"]["OrdinalAnswerReference"];
+        };
+        /** WireTransformInputBody */
+        WireTransformInputBody: {
+            /**
+             * Change Requirement
+             * @description required means the user requests an actual change to the displayed body or its structure, such as a further rewrite, replacement or translation. if_needed means the user requests a target condition and permits the original body when it already satisfies that condition, such as ensuring one line or a specified layout. Delivery alone is never a body change.
+             * @enum {string}
+             */
+            change_requirement: "required" | "if_needed";
+            /**
+             * Evidence Ids
+             * @default []
+             */
+            evidence_ids: string[];
+            /**
+             * Instruction
+             * @description The requested translation, edit or layout-only change. If wording must stay literal while adding a code block/list/table, preserve the selected payload and change only its presentation. Describe only the requested operation on the displayed body. Put file saving and message delivery in actions, not in this instruction. Preserve words about saving or sending when they are quoted payload or the subject being explained.
+             */
+            instruction: string;
+            /**
+             * Kind
+             * @default transform_input
+             * @constant
+             */
+            kind: "transform_input";
+            source: components["schemas"]["InputTextReference"];
         };
         AgentStreamEvent_done: Record<string, never>;
         AgentStreamEvent_error: {

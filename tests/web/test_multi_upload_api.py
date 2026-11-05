@@ -20,12 +20,15 @@ from langchain_openai import ChatOpenAI
 from openai import OpenAI
 
 from src.app.web.app import create_app
+from src.app.transport_contracts import AgentResponse
 from src.core.answer_schema import AnswerDocument, AnswerResponse
 from src.core.answer_schema.wire import SourcedAnswerPayload
 from src.core.planner_schema import InitialPlannerOutput
 from src.core.request_contracts import WireRequestContract
 from src.infra.settings import AppSettings
+from src.eval.online_runner.response_parser import parse_agent_response
 from src.runtime.agent_runtime.debug_collector import DebugCollector
+from src.runtime.agent_runtime.validation_diagnostics import ValidationDiagnosticsRecorder
 
 
 class LocalEmbeddings(Embeddings):
@@ -93,7 +96,7 @@ def api(tmp_path, monkeypatch, request):
         session_ttl_seconds=5, session_cleanup_interval_seconds=1,
         upload_search_mode=getattr(request, "param", "hybrid"),
     )
-    controls = SimpleNamespace(planned_file_ids=None, search_query="compare values")
+    controls = SimpleNamespace(planned_file_ids=None, search_query="compare values", fail_answer_validation=False)
     monkeypatch.setattr("src.app.web.app.get_settings", lambda: settings)
     monkeypatch.setattr("src.infra.runtime_paths.get_project_root_path", lambda: tmp_path)
     monkeypatch.setattr("src.infra.chroma_store.OpenAIEmbeddings", lambda **kwargs: LocalEmbeddings())
@@ -104,7 +107,9 @@ def api(tmp_path, monkeypatch, request):
         payload = json.loads(request.content)
         return httpx.Response(200, json={
             "model": payload["model"],
-            "answers": [{"type": "predicate", "name": question["name"], "probability": 0.99}
+            "answers": [{"type": "predicate", "name": question["name"],
+                         "probability": (0.1 if controls.fail_answer_validation
+                                         and question["name"] == "request_fulfilled" else 0.99)}
                         for question in payload["questions"]],
             "usage": {"input_tokens": 32, "output_tokens": 0, "total_tokens": 32},
         })
@@ -203,6 +208,62 @@ def test_invalid_internal_debug_preserves_the_answer_and_attachment_manifest(api
     assert final["debug"]["observability_status"] == "failed"
     assert final["debug"]["missing_required_debug_fields"] == ["debug"]
     assert final["debug"]["error_codes"] == ["DEBUG_NORMALIZATION_FAILED"]
+
+
+@pytest.mark.parametrize("include_debug", [False, True])
+def test_rejected_draft_is_only_available_in_requested_diagnostics(api, include_debug):
+    source_text = "diagnostic_only_value = 7391\n"
+    current = sync(api, add=[staged(api, "diagnostic.py", source_text)])
+    api.controls.search_query = "diagnostic_only_value"
+    api.controls.fail_answer_validation = True
+
+    events = stream(api, query="첨부의 diagnostic_only_value를 설명해줘", uploads=context(current),
+                    include_debug=include_debug)
+    final = next(data for event, data in events if event == "final_response")
+
+    assert final["status"] == "failed"
+    assert final["response"] is None
+    assert final["problem"]["code"] == "answer_validation_failed"
+    assert final["upload_manifest"] == current
+    if include_debug:
+        diagnostics = final["debug"]["validation_diagnostics"]
+        assert diagnostics["observations"]
+        assert source_text in json.dumps(diagnostics, ensure_ascii=False).replace("\\n", "\n")
+        decoded = AgentResponse.model_validate(final)
+        parsed = parse_agent_response(final, validated_result=decoded.to_turn_result())
+        assert parsed.response_errors == []
+        assert parsed.response is None
+        assert parsed.turn_result.status == "failed"
+        assert parsed.validation_diagnostics.model_dump(mode="json") == diagnostics
+    else:
+        assert final["debug"] is None
+        assert "diagnostic_only_value" not in json.dumps(events, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("diagnostic_error", [TypeError, ValueError])
+@pytest.mark.parametrize("validation_fails", [False, True])
+def test_diagnostic_snapshot_failure_preserves_product_outcome(api, monkeypatch, diagnostic_error, validation_fails):
+    current = manifest(api)
+    api.controls.fail_answer_validation = validation_fails
+
+    def unavailable_diagnostics(self):
+        raise diagnostic_error("Diagnostic serialization unavailable")
+
+    monkeypatch.setattr(ValidationDiagnosticsRecorder, "snapshot", unavailable_diagnostics)
+
+    final = final_response(api, uploads=context(current), include_debug=True)
+
+    assert final["status"] == ("failed" if validation_fails else "completed")
+    if validation_fails:
+        assert final["response"] is None
+        assert final["problem"]["code"] == "answer_validation_failed"
+    else:
+        assert final["response"] is not None
+        assert final["problem"] is None
+    assert final["upload_manifest"] == current
+    assert final["debug"]["observability_status"] == "failed"
+    assert "validation_diagnostics" in final["debug"]["missing_required_debug_fields"]
+    assert "DEBUG_NORMALIZATION_FAILED" in final["debug"]["error_codes"]
 
 
 def test_http_session_boundary_preserves_case_identity_and_rejects_invalid_ids(api):

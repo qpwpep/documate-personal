@@ -1,6 +1,49 @@
 {
   "components": {
     "schemas": {
+      "AcknowledgeBody": {
+        "additionalProperties": false,
+        "description": "Confirm a complete instruction without creating a deliverable document.",
+        "properties": {
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "kind": {
+            "const": "acknowledge",
+            "default": "acknowledge",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "evidence_ids"
+        ],
+        "title": "AcknowledgeBody",
+        "type": "object"
+      },
+      "ActionContract": {
+        "additionalProperties": false,
+        "properties": {
+          "save_text": {
+            "$ref": "#/components/schemas/ActionRequest"
+          },
+          "slack_notify": {
+            "$ref": "#/components/schemas/ActionRequest"
+          }
+        },
+        "required": [
+          "save_text",
+          "slack_notify"
+        ],
+        "title": "ActionContract",
+        "type": "object"
+      },
       "ActionReceipt": {
         "additionalProperties": false,
         "properties": {
@@ -160,6 +203,37 @@
           "error_code"
         ],
         "title": "ActionReceipt",
+        "type": "object"
+      },
+      "ActionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "intent": {
+            "default": "not_requested",
+            "description": "This turn's action instruction only. For a pending request, not_requested with no evidence means no change; the server preserves prior authorization and completion. A requested TXT file is save_text; merely reformatting text on screen is not saving.",
+            "enum": [
+              "requested",
+              "forbidden",
+              "not_requested",
+              "unresolved"
+            ],
+            "title": "Intent",
+            "type": "string"
+          }
+        },
+        "required": [
+          "intent",
+          "evidence_ids"
+        ],
+        "title": "ActionRequest",
         "type": "object"
       },
       "ActionResults": {
@@ -343,6 +417,72 @@
           "debug"
         ],
         "title": "AgentResponse",
+        "type": "object"
+      },
+      "AnswerContract": {
+        "additionalProperties": false,
+        "description": "Content, presentation and soft preferences stay independent of retrieval.",
+        "properties": {
+          "citation_scope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CitationScope"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Explicit user constraint on the kinds of source elements the answer may cite. Null imposes no kind restriction for a new request and preserves the existing scope for a pending request. A replacement requires current user evidence scoped to answer.citation_scope."
+          },
+          "content": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ContentRequirement"
+            },
+            "title": "Content",
+            "type": "array"
+          },
+          "format": {
+            "default": [],
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/LayoutRequirement"
+                },
+                {
+                  "$ref": "#/components/schemas/LineCountRequirement"
+                }
+              ]
+            },
+            "title": "Format",
+            "type": "array"
+          },
+          "preferences": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Preferences",
+            "type": "array"
+          },
+          "sentence_counts": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SentenceCountRequirement"
+            },
+            "title": "Sentence Counts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "content",
+          "format",
+          "sentence_counts",
+          "citation_scope",
+          "preferences"
+        ],
+        "title": "AnswerContract",
         "type": "object"
       },
       "AnswerDocument": {
@@ -529,6 +669,24 @@
         "title": "AnswerProvenance",
         "type": "object"
       },
+      "AnswerReference": {
+        "additionalProperties": false,
+        "properties": {
+          "ref": {
+            "enum": [
+              "previous",
+              "pending"
+            ],
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "title": "AnswerReference",
+        "type": "object"
+      },
       "AnswerSource": {
         "additionalProperties": false,
         "description": "The resolved parent's complete adopted citation set, not its old search candidates.",
@@ -574,6 +732,69 @@
           "file"
         ],
         "title": "Body_stage_browser_upload_sessions__session_id__uploads_staging_post",
+        "type": "object"
+      },
+      "BoundAnswerReference": {
+        "additionalProperties": false,
+        "properties": {
+          "ref": {
+            "enum": [
+              "previous",
+              "pending"
+            ],
+            "title": "Ref",
+            "type": "string"
+          },
+          "response_hash": {
+            "minLength": 1,
+            "title": "Response Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "response_hash"
+        ],
+        "title": "BoundAnswerReference",
+        "type": "object"
+      },
+      "BoundInputText": {
+        "additionalProperties": false,
+        "properties": {
+          "content_hash": {
+            "minLength": 1,
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "end": {
+            "minimum": 1,
+            "title": "End",
+            "type": "integer"
+          },
+          "start": {
+            "minimum": 0,
+            "title": "Start",
+            "type": "integer"
+          },
+          "text": {
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "turn_id": {
+            "minLength": 1,
+            "title": "Turn Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "turn_id",
+          "text",
+          "start",
+          "end",
+          "content_hash"
+        ],
+        "title": "BoundInputText",
         "type": "object"
       },
       "BrowserUploadAddition": {
@@ -684,6 +905,43 @@
         "title": "CapturedAnswerSource",
         "type": "object"
       },
+      "CitationScope": {
+        "additionalProperties": false,
+        "description": "User-selected source element kinds permitted in actual answer citations.",
+        "properties": {
+          "allowed_kinds": {
+            "description": "Allowed kinds of cited source elements, not output layout or file extensions. For code-only citations use ['code']; do not repeat this constraint as custom content. Retrieval route and file selection remain in retrieval requirements.",
+            "items": {
+              "enum": [
+                "heading",
+                "paragraph",
+                "list",
+                "code",
+                "table",
+                "image"
+              ],
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Allowed Kinds",
+            "type": "array"
+          },
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "allowed_kinds",
+          "evidence_ids"
+        ],
+        "title": "CitationScope",
+        "type": "object"
+      },
       "ClientConfig": {
         "additionalProperties": false,
         "description": "Public input limits; server settings and credentials remain private.",
@@ -790,6 +1048,38 @@
         "title": "CodeBlock",
         "type": "object"
       },
+      "ComposeBody": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "instruction": {
+            "default": "",
+            "description": "Describe only the requested operation on the displayed body. Put file saving and message delivery in actions, not in this instruction. Preserve words about saving or sending when they are quoted payload or the subject being explained.",
+            "title": "Instruction",
+            "type": "string"
+          },
+          "kind": {
+            "const": "compose",
+            "default": "compose",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "instruction",
+          "evidence_ids"
+        ],
+        "title": "ComposeBody",
+        "type": "object"
+      },
       "ConfiguredRecipient": {
         "additionalProperties": false,
         "description": "An explicit reference to the exact recipient offered by this request's UI.",
@@ -825,6 +1115,72 @@
           "evidence_ids"
         ],
         "title": "ConfiguredRecipient",
+        "type": "object"
+      },
+      "ContentRequirement": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "default": "",
+            "description": "An independently requested content subject and its scope; mode carries the required/forbidden polarity. Describe prohibited content itself, such as 'explanatory prose in the source text', not 'do not include explanation'. Exact copy already guarantees no changes or additions: do not create content conditions for 'copy unchanged' or 'do not add a new explanation'. Preserve conditions on the selected text itself, such as required topics or prohibited original content. Do not restate saving, sending, or the body operation as a content condition.",
+            "title": "Description",
+            "type": "string"
+          },
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "kind": {
+            "description": "Semantic content only. code means program code, code_example means an illustrative code example, and example means an illustration of any kind. A code_block is layout and can contain logs or input text. Do not repeat the body transformation, action, line count or layout as custom content. A table prohibition belongs to format.table, not comparison or custom.",
+            "enum": [
+              "code",
+              "code_example",
+              "example",
+              "comparison",
+              "options_summary",
+              "explanation",
+              "procedure",
+              "custom"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "required",
+              "forbidden",
+              "preferred"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "replaces": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "For a change to one pending content condition, copy its offered ref from pending_request.confirmed_facts.answer.content. Null adds an independent condition. Never invent a ref; it is valid only for the offered request revision.",
+            "title": "Replaces"
+          }
+        },
+        "required": [
+          "kind",
+          "mode",
+          "description",
+          "evidence_ids",
+          "replaces"
+        ],
+        "title": "ContentRequirement",
         "type": "object"
       },
       "ContentUnit": {
@@ -890,6 +1246,94 @@
           "sentence_scope"
         ],
         "title": "ContentUnit",
+        "type": "object"
+      },
+      "ContractEvidence": {
+        "additionalProperties": false,
+        "description": "An interpreted user clause, not retrieved evidence or an execution permit.",
+        "properties": {
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "interpretation": {
+            "enum": [
+              "instruction",
+              "negation",
+              "mention",
+              "quotation",
+              "correction",
+              "reference"
+            ],
+            "title": "Interpretation",
+            "type": "string"
+          },
+          "quote": {
+            "minLength": 1,
+            "title": "Quote",
+            "type": "string"
+          },
+          "scope": {
+            "description": "The affected field or subject, e.g. actions.save_text or answer.content.code_example.",
+            "minLength": 1,
+            "title": "Scope",
+            "type": "string"
+          },
+          "turn_id": {
+            "minLength": 1,
+            "title": "Turn Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "turn_id",
+          "quote",
+          "scope",
+          "interpretation"
+        ],
+        "title": "ContractEvidence",
+        "type": "object"
+      },
+      "CopyAnswerBody": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "copy_answer",
+            "default": "copy_answer",
+            "title": "Kind",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/BoundAnswerReference"
+          }
+        },
+        "required": [
+          "kind",
+          "source"
+        ],
+        "title": "CopyAnswerBody",
+        "type": "object"
+      },
+      "CopyInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "copy_input",
+            "default": "copy_input",
+            "title": "Kind",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/BoundInputText"
+          }
+        },
+        "required": [
+          "kind",
+          "source"
+        ],
+        "title": "CopyInputBody",
         "type": "object"
       },
       "DebugPayload": {
@@ -1105,7 +1549,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": 14,
+            "default": 15,
             "title": "Schema Version",
             "type": "integer"
           },
@@ -1120,6 +1564,9 @@
             },
             "title": "Tool Calls",
             "type": "array"
+          },
+          "validation_diagnostics": {
+            "$ref": "#/components/schemas/ValidationDiagnostics"
           },
           "validation_events": {
             "items": {
@@ -1140,6 +1587,7 @@
           "errors",
           "error_codes",
           "validation_events",
+          "validation_diagnostics",
           "memory_compactions",
           "planner_errors",
           "observed_hits",
@@ -1154,6 +1602,209 @@
           "route_decisions"
         ],
         "title": "DebugPayload",
+        "type": "object"
+      },
+      "DiagnosticCandidate": {
+        "additionalProperties": false,
+        "properties": {
+          "context_evidence_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Context Evidence Ids",
+            "type": "array"
+          },
+          "evidence_id": {
+            "title": "Evidence Id",
+            "type": "string"
+          },
+          "requirement_id": {
+            "title": "Requirement Id",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "candidate",
+              "context"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "supporting_evidence_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supporting Evidence Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "requirement_id",
+          "evidence_id",
+          "role",
+          "supporting_evidence_ids",
+          "context_evidence_ids"
+        ],
+        "title": "DiagnosticCandidate",
+        "type": "object"
+      },
+      "DiagnosticPacket": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "failed_requirement_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Failed Requirement Ids",
+            "type": "array"
+          },
+          "fingerprint": {
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "normal",
+              "compact",
+              "used"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "requirement_map": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Requirement Map",
+            "type": "object"
+          }
+        },
+        "required": [
+          "mode",
+          "evidence_ids",
+          "requirement_map",
+          "fingerprint",
+          "failed_requirement_ids"
+        ],
+        "title": "DiagnosticPacket",
+        "type": "object"
+      },
+      "DiagnosticPredicate": {
+        "additionalProperties": false,
+        "properties": {
+          "cached": {
+            "default": false,
+            "title": "Cached",
+            "type": "boolean"
+          },
+          "criterion": {
+            "title": "Criterion",
+            "type": "string"
+          },
+          "evidence_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Evidence Id"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "packet_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "normal",
+                  "compact",
+                  "used"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Packet Mode"
+          },
+          "probability": {
+            "anyOf": [
+              {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Probability"
+          },
+          "requirement_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Requirement Id"
+          },
+          "status": {
+            "default": "pending",
+            "enum": [
+              "pending",
+              "evaluated",
+              "refused"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "unit_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Unit Id"
+          }
+        },
+        "required": [
+          "name",
+          "criterion",
+          "requirement_id",
+          "evidence_id",
+          "unit_id",
+          "packet_mode",
+          "status",
+          "probability",
+          "cached"
+        ],
+        "title": "DiagnosticPredicate",
         "type": "object"
       },
       "DocsSearchProviderRequest": {
@@ -1538,6 +2189,47 @@
         "title": "ExplicitRecipient",
         "type": "object"
       },
+      "ExtractBody": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "instruction": {
+            "default": "",
+            "description": "Describe only the requested operation on the displayed body. Put file saving and message delivery in actions, not in this instruction. Preserve words about saving or sending when they are quoted payload or the subject being explained.",
+            "title": "Instruction",
+            "type": "string"
+          },
+          "kind": {
+            "const": "extract",
+            "default": "extract",
+            "title": "Kind",
+            "type": "string"
+          },
+          "requirement_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Requirement Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "instruction",
+          "requirement_ids",
+          "evidence_ids"
+        ],
+        "title": "ExtractBody",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1577,6 +2269,43 @@
           "content"
         ],
         "title": "HeadingBlock",
+        "type": "object"
+      },
+      "InputTextReference": {
+        "additionalProperties": false,
+        "properties": {
+          "occurrence": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "One-based occurrence, only when the user's selection identifies it. Null means the quote must be unique.",
+            "title": "Occurrence"
+          },
+          "quote": {
+            "description": "Exact payload text to copy or transform. Exclude surrounding quotation delimiters unless those marks themselves are part of the requested payload. Never paraphrase or normalize the source.",
+            "minLength": 1,
+            "title": "Quote",
+            "type": "string"
+          },
+          "turn_id": {
+            "minLength": 1,
+            "title": "Turn Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "turn_id",
+          "quote",
+          "occurrence"
+        ],
+        "title": "InputTextReference",
         "type": "object"
       },
       "LLMCallRecord": {
@@ -2035,6 +2764,96 @@
         "title": "LatencyBreakdownModel",
         "type": "object"
       },
+      "LayoutRequirement": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "kind": {
+            "description": "Explicit layout. inline_code means code spans within prose or an inline CodeBlock; code_block means a separate block. Preserve which content needs the format in the body instruction. No table means table/forbidden, not comparison or custom content. Layouts have no numeric value.",
+            "enum": [
+              "code_block",
+              "inline_code",
+              "ordered_list",
+              "list",
+              "table",
+              "headings"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "required",
+              "forbidden",
+              "preferred"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "value": {
+            "default": null,
+            "title": "Value",
+            "type": "null"
+          }
+        },
+        "required": [
+          "kind",
+          "mode",
+          "value",
+          "evidence_ids"
+        ],
+        "title": "LayoutRequirement",
+        "type": "object"
+      },
+      "LineCountRequirement": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "kind": {
+            "const": "line_count",
+            "default": "line_count",
+            "title": "Kind",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "required",
+              "forbidden",
+              "preferred"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "value": {
+            "description": "The explicit number of nonempty body lines. Never null.",
+            "minimum": 1,
+            "title": "Value",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "mode",
+          "value",
+          "evidence_ids"
+        ],
+        "title": "LineCountRequirement",
+        "type": "object"
+      },
       "ListBlock": {
         "additionalProperties": false,
         "properties": {
@@ -2066,6 +2885,48 @@
         "title": "ListBlock",
         "type": "object"
       },
+      "MissingInformation": {
+        "additionalProperties": false,
+        "properties": {
+          "question": {
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "not_provided",
+              "unknown_id",
+              "quote_not_found",
+              "ambiguous_scope",
+              "unclear"
+            ],
+            "title": "Reason",
+            "type": "string"
+          },
+          "slot": {
+            "description": "The actual missing user fact. save_intent/slack_intent mean whether to execute, not filename, path or destination. Save filenames are generated by the server and require no user input. A pure prohibition needs no subject or destination.",
+            "enum": [
+              "subject",
+              "input_reference",
+              "answer_reference",
+              "pending_request",
+              "save_intent",
+              "slack_intent",
+              "slack_destination"
+            ],
+            "title": "Slot",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slot",
+          "reason",
+          "question"
+        ],
+        "title": "MissingInformation",
+        "type": "object"
+      },
       "OmittedRecipient": {
         "additionalProperties": false,
         "properties": {
@@ -2080,6 +2941,28 @@
           "state"
         ],
         "title": "OmittedRecipient",
+        "type": "object"
+      },
+      "OrdinalAnswerReference": {
+        "additionalProperties": false,
+        "properties": {
+          "ordinal": {
+            "description": "The one-based answer position explicitly requested by the user. Preserve it even when no offered answer has this position; never substitute previous.",
+            "minimum": 1,
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "ref": {
+            "const": "ordinal",
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "ordinal"
+        ],
+        "title": "OrdinalAnswerReference",
         "type": "object"
       },
       "ParagraphBlock": {
@@ -2378,6 +3261,171 @@
           "value"
         ],
         "title": "RecipientSelector",
+        "type": "object"
+      },
+      "RequestContract": {
+        "additionalProperties": false,
+        "description": "Immutable server-bound facts; execution readiness is derived, never model asserted.",
+        "properties": {
+          "actions": {
+            "$ref": "#/components/schemas/ActionContract"
+          },
+          "answer": {
+            "$ref": "#/components/schemas/AnswerContract"
+          },
+          "body": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ComposeBody"
+              },
+              {
+                "$ref": "#/components/schemas/AcknowledgeBody"
+              },
+              {
+                "$ref": "#/components/schemas/CopyInputBody"
+              },
+              {
+                "$ref": "#/components/schemas/TransformInputBody"
+              },
+              {
+                "$ref": "#/components/schemas/CopyAnswerBody"
+              },
+              {
+                "$ref": "#/components/schemas/TransformAnswerBody"
+              },
+              {
+                "$ref": "#/components/schemas/ExtractBody"
+              },
+              {
+                "$ref": "#/components/schemas/UnresolvedBody"
+              }
+            ],
+            "title": "Body"
+          },
+          "body_request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ComposeBody"
+              },
+              {
+                "$ref": "#/components/schemas/AcknowledgeBody"
+              },
+              {
+                "$ref": "#/components/schemas/WireCopyInputBody"
+              },
+              {
+                "$ref": "#/components/schemas/WireTransformInputBody"
+              },
+              {
+                "$ref": "#/components/schemas/WireCopyAnswerBody"
+              },
+              {
+                "$ref": "#/components/schemas/WireTransformAnswerBody"
+              },
+              {
+                "$ref": "#/components/schemas/ExtractBody"
+              },
+              {
+                "$ref": "#/components/schemas/UnresolvedBody"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Body Request"
+          },
+          "evidence": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ContractEvidence"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "missing_info": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/MissingInformation"
+            },
+            "title": "Missing Info",
+            "type": "array"
+          },
+          "relation": {
+            "default": "new",
+            "enum": [
+              "new",
+              "correction",
+              "supplement",
+              "cancel"
+            ],
+            "title": "Relation",
+            "type": "string"
+          },
+          "request_id": {
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "revision": {
+            "default": 1,
+            "minimum": 1,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "slack_recipient": {
+            "discriminator": {
+              "mapping": {
+                "configured": "#/components/schemas/ConfiguredRecipient",
+                "explicit": "#/components/schemas/ExplicitRecipient",
+                "omitted": "#/components/schemas/OmittedRecipient",
+                "unresolved": "#/components/schemas/UnresolvedRecipient"
+              },
+              "propertyName": "state"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OmittedRecipient"
+              },
+              {
+                "$ref": "#/components/schemas/ExplicitRecipient"
+              },
+              {
+                "$ref": "#/components/schemas/ConfiguredRecipient"
+              },
+              {
+                "$ref": "#/components/schemas/UnresolvedRecipient"
+              }
+            ],
+            "title": "Slack Recipient"
+          },
+          "target_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Target Request Id"
+          }
+        },
+        "required": [
+          "relation",
+          "target_request_id",
+          "actions",
+          "slack_recipient",
+          "answer",
+          "evidence",
+          "missing_info",
+          "request_id",
+          "revision",
+          "body",
+          "body_request"
+        ],
+        "title": "RequestContract",
         "type": "object"
       },
       "ResponseIssue": {
@@ -3412,6 +4460,75 @@
           "checks"
         ],
         "title": "SemanticValidation",
+        "type": "object"
+      },
+      "SentenceCountRequirement": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "kind": {
+            "const": "sentence_count",
+            "default": "sentence_count",
+            "title": "Kind",
+            "type": "string"
+          },
+          "maximum": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Maximum"
+          },
+          "minimum": {
+            "minimum": 0,
+            "title": "Minimum",
+            "type": "integer"
+          },
+          "mode": {
+            "default": "required",
+            "enum": [
+              "required",
+              "preferred"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The target and content covered by this quota; null means the whole body. Split per-target quotas into separate entries. True and False explanations for the same target are distinct scopes.",
+            "title": "Scope"
+          }
+        },
+        "required": [
+          "kind",
+          "scope",
+          "minimum",
+          "maximum",
+          "mode",
+          "evidence_ids"
+        ],
+        "title": "SentenceCountRequirement",
         "type": "object"
       },
       "SlackDefault": {
@@ -4617,6 +5734,98 @@
         "title": "ToolExecutionEvidence",
         "type": "object"
       },
+      "TransformAnswerBody": {
+        "additionalProperties": false,
+        "properties": {
+          "change_requirement": {
+            "description": "required means the user requests an actual change to the displayed body or its structure, such as a further rewrite, replacement or translation. if_needed means the user requests a target condition and permits the original body when it already satisfies that condition, such as ensuring one line or a specified layout. Delivery alone is never a body change.",
+            "enum": [
+              "required",
+              "if_needed"
+            ],
+            "title": "Change Requirement",
+            "type": "string"
+          },
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "instruction": {
+            "description": "Describe only the requested operation on the displayed body. Put file saving and message delivery in actions, not in this instruction. Preserve words about saving or sending when they are quoted payload or the subject being explained.",
+            "minLength": 1,
+            "title": "Instruction",
+            "type": "string"
+          },
+          "kind": {
+            "const": "transform_answer",
+            "default": "transform_answer",
+            "title": "Kind",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/BoundAnswerReference"
+          }
+        },
+        "required": [
+          "kind",
+          "source",
+          "change_requirement",
+          "instruction",
+          "evidence_ids"
+        ],
+        "title": "TransformAnswerBody",
+        "type": "object"
+      },
+      "TransformInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "change_requirement": {
+            "description": "required means the user requests an actual change to the displayed body or its structure, such as a further rewrite, replacement or translation. if_needed means the user requests a target condition and permits the original body when it already satisfies that condition, such as ensuring one line or a specified layout. Delivery alone is never a body change.",
+            "enum": [
+              "required",
+              "if_needed"
+            ],
+            "title": "Change Requirement",
+            "type": "string"
+          },
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "instruction": {
+            "description": "Describe only the requested operation on the displayed body. Put file saving and message delivery in actions, not in this instruction. Preserve words about saving or sending when they are quoted payload or the subject being explained.",
+            "minLength": 1,
+            "title": "Instruction",
+            "type": "string"
+          },
+          "kind": {
+            "const": "transform_input",
+            "default": "transform_input",
+            "title": "Kind",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/BoundInputText"
+          }
+        },
+        "required": [
+          "kind",
+          "source",
+          "change_requirement",
+          "instruction",
+          "evidence_ids"
+        ],
+        "title": "TransformInputBody",
+        "type": "object"
+      },
       "UnitCheck": {
         "additionalProperties": false,
         "properties": {
@@ -4659,6 +5868,35 @@
           "issues"
         ],
         "title": "UnitCheck",
+        "type": "object"
+      },
+      "UnresolvedBody": {
+        "additionalProperties": false,
+        "properties": {
+          "instruction": {
+            "default": "",
+            "description": "Describe only the requested operation on the displayed body. Put file saving and message delivery in actions, not in this instruction. Preserve words about saving or sending when they are quoted payload or the subject being explained.",
+            "title": "Instruction",
+            "type": "string"
+          },
+          "kind": {
+            "const": "unresolved",
+            "default": "unresolved",
+            "title": "Kind",
+            "type": "string"
+          },
+          "question": {
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "question",
+          "instruction"
+        ],
+        "title": "UnresolvedBody",
         "type": "object"
       },
       "UnresolvedRecipient": {
@@ -4926,6 +6164,37 @@
         "title": "UsageIssue",
         "type": "object"
       },
+      "ValidationDiagnostics": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EvidenceRef"
+            },
+            "title": "Evidence",
+            "type": "object"
+          },
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationObservation"
+            },
+            "title": "Observations",
+            "type": "array"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "evidence",
+          "observations"
+        ],
+        "title": "ValidationDiagnostics",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -4964,6 +6233,377 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "ValidationObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt": {
+            "minimum": 1,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "body": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnswerDocument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "body_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Body Hash"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticCandidate"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "failed_requirement_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Failed Requirement Ids",
+            "type": "array"
+          },
+          "failure_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Failure Type"
+          },
+          "local_failed_unit_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Local Failed Unit Ids",
+            "type": "array"
+          },
+          "local_failures": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Local Failures",
+            "type": "array"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "packets": {
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticPacket"
+            },
+            "title": "Packets",
+            "type": "array"
+          },
+          "predicates": {
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticPredicate"
+            },
+            "title": "Predicates",
+            "type": "array"
+          },
+          "request_contract": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RequestContract"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "enum": [
+              "preparation",
+              "generated",
+              "filtered"
+            ],
+            "title": "Revision",
+            "type": "string"
+          },
+          "selected_packet_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "normal",
+                  "compact"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Selected Packet Mode"
+          },
+          "semantic_tasks": {
+            "items": {
+              "$ref": "#/components/schemas/RetrievalTask"
+            },
+            "title": "Semantic Tasks",
+            "type": "array"
+          },
+          "sequence": {
+            "minimum": 1,
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "skip_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Skip Reason"
+          },
+          "stage": {
+            "enum": [
+              "pre_synthesis_validation",
+              "post_synthesis_validation"
+            ],
+            "title": "Stage",
+            "type": "string"
+          },
+          "status": {
+            "default": "started",
+            "enum": [
+              "started",
+              "completed",
+              "skipped",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/RetrievalTask"
+            },
+            "title": "Tasks",
+            "type": "array"
+          },
+          "terminal_failed_requirement_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Terminal Failed Requirement Ids",
+            "type": "array"
+          },
+          "threshold": {
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Threshold",
+            "type": "number"
+          },
+          "user_input": {
+            "title": "User Input",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sequence",
+          "stage",
+          "attempt",
+          "revision",
+          "model",
+          "threshold",
+          "status",
+          "user_input",
+          "request_contract",
+          "tasks",
+          "semantic_tasks",
+          "candidates",
+          "packets",
+          "selected_packet_mode",
+          "body",
+          "body_hash",
+          "terminal_failed_requirement_ids",
+          "predicates",
+          "local_failures",
+          "local_failed_unit_ids",
+          "failed_requirement_ids",
+          "skip_reason",
+          "failure_type"
+        ],
+        "title": "ValidationObservation",
+        "type": "object"
+      },
+      "WireCopyAnswerBody": {
+        "additionalProperties": false,
+        "description": "Reuse a displayed answer including its existing sources and limitations.\n\nTXT serialization and inclusion of existing citations are server export\nbehavior, not transformations of the answer's wording or content. A newly\nrequested displayed layout uses transform_answer even if wording stays literal.",
+        "properties": {
+          "kind": {
+            "const": "copy_answer",
+            "default": "copy_answer",
+            "title": "Kind",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnswerReference"
+              },
+              {
+                "$ref": "#/components/schemas/OrdinalAnswerReference"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "required": [
+          "kind",
+          "source"
+        ],
+        "title": "WireCopyAnswerBody",
+        "type": "object"
+      },
+      "WireCopyInputBody": {
+        "additionalProperties": false,
+        "description": "Copy literal input with unchanged layout; a newly requested layout uses transform_input.",
+        "properties": {
+          "kind": {
+            "const": "copy_input",
+            "default": "copy_input",
+            "title": "Kind",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/InputTextReference"
+          }
+        },
+        "required": [
+          "kind",
+          "source"
+        ],
+        "title": "WireCopyInputBody",
+        "type": "object"
+      },
+      "WireTransformAnswerBody": {
+        "additionalProperties": false,
+        "description": "Change the actual answer body, for example its language, length or claims.\n\nSaving the existing answer with its sources/limitations is copy_answer.",
+        "properties": {
+          "change_requirement": {
+            "description": "required means the user requests an actual change to the displayed body or its structure, such as a further rewrite, replacement or translation. if_needed means the user requests a target condition and permits the original body when it already satisfies that condition, such as ensuring one line or a specified layout. Delivery alone is never a body change.",
+            "enum": [
+              "required",
+              "if_needed"
+            ],
+            "title": "Change Requirement",
+            "type": "string"
+          },
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "instruction": {
+            "description": "The requested change to the answer's actual wording, language, structure or claims. TXT serialization or including existing sources/limitations is not a body change; use copy_answer. Describe only the requested operation on the displayed body. Put file saving and message delivery in actions, not in this instruction. Preserve words about saving or sending when they are quoted payload or the subject being explained.",
+            "minLength": 1,
+            "title": "Instruction",
+            "type": "string"
+          },
+          "kind": {
+            "const": "transform_answer",
+            "default": "transform_answer",
+            "title": "Kind",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnswerReference"
+              },
+              {
+                "$ref": "#/components/schemas/OrdinalAnswerReference"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "required": [
+          "kind",
+          "source",
+          "change_requirement",
+          "instruction",
+          "evidence_ids"
+        ],
+        "title": "WireTransformAnswerBody",
+        "type": "object"
+      },
+      "WireTransformInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "change_requirement": {
+            "description": "required means the user requests an actual change to the displayed body or its structure, such as a further rewrite, replacement or translation. if_needed means the user requests a target condition and permits the original body when it already satisfies that condition, such as ensuring one line or a specified layout. Delivery alone is never a body change.",
+            "enum": [
+              "required",
+              "if_needed"
+            ],
+            "title": "Change Requirement",
+            "type": "string"
+          },
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "instruction": {
+            "description": "The requested translation, edit or layout-only change. If wording must stay literal while adding a code block/list/table, preserve the selected payload and change only its presentation. Describe only the requested operation on the displayed body. Put file saving and message delivery in actions, not in this instruction. Preserve words about saving or sending when they are quoted payload or the subject being explained.",
+            "minLength": 1,
+            "title": "Instruction",
+            "type": "string"
+          },
+          "kind": {
+            "const": "transform_input",
+            "default": "transform_input",
+            "title": "Kind",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/InputTextReference"
+          }
+        },
+        "required": [
+          "kind",
+          "source",
+          "change_requirement",
+          "instruction",
+          "evidence_ids"
+        ],
+        "title": "WireTransformInputBody",
         "type": "object"
       }
     }

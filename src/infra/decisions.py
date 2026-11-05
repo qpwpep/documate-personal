@@ -20,6 +20,7 @@ from src.infra.llm_boundary import (
 )
 from src.infra.logging_utils import log_event
 from src.runtime.agent_runtime.llm_usage import record_llm_call
+from src.runtime.agent_runtime.validation_diagnostics import record_decisions
 
 
 logger = logging.getLogger(__name__)
@@ -190,6 +191,7 @@ class DecisionsClient:
                               request_id=request_id, input_tokens=usage.input_tokens, output_tokens=usage.output_tokens)
                     probabilities.update(batch_result.probabilities)
                     refused_names.update(batch_result.refused_names)
+                    record_decisions(batch_result)
                     break
                 except Exception as exc:
                     if isinstance(exc, LLMCallError) and exc.problem.code in {"request_timeout", "call_budget_exhausted"}:

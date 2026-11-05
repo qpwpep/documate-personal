@@ -19,6 +19,8 @@ from src.runtime.nodes.validation.policy import build_followup_updates
 from src.runtime.nodes.validation.route_policy import non_retryable_retrieval_problem
 from src.runtime.nodes.validation.semantic import DecisionEvaluator
 from src.runtime.nodes.validation.prepared_semantics import prepare_answer_evidence
+from src.runtime.nodes.validation.diagnostics import observe_validation_node
+from src.runtime.agent_runtime.validation_diagnostics import mark_validation_skipped
 from src.runtime.nodes.synthesis.budgets import ExcerptLimits
 from src.runtime.nodes.synthesis.evidence_selection import tasks_for_hit, upload_file_id
 
@@ -31,6 +33,8 @@ def make_pre_synthesis_validation_node(
     excerpt_limits: ExcerptLimits,
     max_turns: int = 6,
 ):
+    @observe_validation_node(stage="pre_synthesis_validation", model=decisions_client.model_name,
+                             threshold=pass_threshold)
     def pre_synthesis_validation(state: GraphState) -> GraphState:
         planner = get_planner_state(state)
         response = get_response_state(state)
@@ -42,6 +46,7 @@ def make_pre_synthesis_validation_node(
         if contract is None:
             raise LLMCallError(make_problem("internal_error", "pre_synthesis_validation"))
         if contract.can_acknowledge() or contract.can_cancel_pending():
+            mark_validation_skipped("deterministic_acknowledgement")
             # These server-resolved instructions create no deliverable body.
             # Preserve their deterministic acknowledgment/cancellation path.
             return {"retry": retry_context.model_copy(update={
@@ -57,6 +62,7 @@ def make_pre_synthesis_validation_node(
             guided_followup = ""
 
         if guided_followup:
+            mark_validation_skipped("guided_followup")
             if planner.diagnostics.reason != "upload_retriever_missing":
                 updates = {"retry": retry_context.model_copy(update={
                     "needs_retry": False, "retry_reason": None, "failed_routes": [],

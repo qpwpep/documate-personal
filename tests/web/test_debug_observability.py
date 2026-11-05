@@ -15,6 +15,7 @@ from src.core.documents import DocumentElement, build_snapshot
 from src.core.evidence import RetrievalScore, SearchHit, build_evidence
 from src.eval.online_runner.response_parser import parse_agent_response
 from src.runtime.agent_runtime.debug_collector import DebugCollector
+from tests.validation_diagnostic_fixtures import rejected_answer_diagnostics
 
 
 @pytest.fixture
@@ -169,3 +170,31 @@ def test_invalid_execution_history_cannot_bypass_the_typed_contract(debug_payloa
 
     with pytest.raises(ValidationError, match="unfinished"):
         DebugPayload.model_validate(debug_payload)
+
+
+@pytest.mark.parametrize("diagnostics", [None, {}, [None], [{}]])
+def test_eval_rejects_invalid_validation_diagnostics_without_dropping_raw_records(debug_payload, diagnostics):
+    debug_payload["validation_diagnostics"] = diagnostics
+
+    parsed = parse_agent_response({
+        "status": "needs_input", "message": "Which source?", "debug": debug_payload,
+    })
+
+    assert any("debug.validation_diagnostics" in error for error in parsed.response_errors)
+    assert parsed.debug["validation_diagnostics"] == diagnostics
+    assert parsed.turn_result.status == "needs_input"
+    assert parsed.response is None
+
+
+def test_eval_preserves_failed_draft_diagnostics_as_observations(debug_payload):
+    diagnostics = rejected_answer_diagnostics()
+    debug_payload["validation_diagnostics"] = diagnostics.model_dump(mode="json")
+
+    parsed = parse_agent_response({
+        "status": "needs_input", "message": "Which source?", "debug": debug_payload,
+    })
+
+    assert parsed.response_errors == []
+    assert parsed.response is None
+    assert parsed.validation_diagnostics == diagnostics
+    assert parsed.debug["validation_diagnostics"] == diagnostics.model_dump(mode="json")

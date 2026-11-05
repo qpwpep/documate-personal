@@ -10,6 +10,7 @@ from src.core.conversation_memory import (
 from src.runtime.agent_runtime import AgentGraph, DebugCollector, ExecutionRunner, GraphInvocationError, ResponseAssembler, SessionContext
 from src.runtime.agent_runtime.tool_execution import capture_tool_execution
 from src.runtime.agent_runtime.llm_usage import capture_llm_usage
+from src.runtime.agent_runtime.validation_diagnostics import capture_validation_diagnostics
 from src.core.answer_schema import finalize_answer, text_document
 from src.core.answer_schema.rendering import render_answer_text
 from src.core.request_contracts import required_contract_turn_ids
@@ -151,11 +152,22 @@ class AgentFlowManager:
     ) -> AgentExecutionResult:
         with (capture_tool_execution(progress_emitter.execution_id if progress_emitter is not None else None) as recorder,
               capture_llm_usage() as usage_recorder, capture_llm_diagnostics() as diagnostics,
+              capture_validation_diagnostics() as validation_recorder,
               request_deadline(self.settings.request_timeout_seconds)):
             result = self._run_agent_flow(user_input, progress_emitter=progress_emitter)
             evidence = recorder.snapshot()
             debug = result.debug
             debug.llm_calls = usage_recorder.snapshot()
+            try:
+                debug.validation_diagnostics = validation_recorder.snapshot()
+            except (TypeError, ValueError) as exc:
+                # Diagnostics cannot replace an already determined product outcome.
+                debug.observability_status = "failed"
+                if "validation_diagnostics" not in debug.missing_required_debug_fields:
+                    debug.missing_required_debug_fields.append("validation_diagnostics")
+                if "DEBUG_NORMALIZATION_FAILED" not in debug.error_codes:
+                    debug.error_codes.append("DEBUG_NORMALIZATION_FAILED")
+                log_event(logger, logging.ERROR, "validation_diagnostics_failure", exception_type=type(exc).__name__)
             debug.llm_diagnostics = list(diagnostics) or debug.llm_diagnostics
             result.outcome.execution_id = progress_emitter.execution_id if progress_emitter is not None else ""
             debug.execution_evidence = evidence

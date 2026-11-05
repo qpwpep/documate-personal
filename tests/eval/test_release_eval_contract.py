@@ -31,6 +31,7 @@ from src.eval.save_outcomes import revalidate_saved_artifacts
 from src.eval.summary_models import ReleaseSuiteContract
 from src.eval.weighting import resolve_case_weights
 from src.infra.saved_artifacts import read_saved_artifact, save_artifact
+from tests.validation_diagnostic_fixtures import rejected_answer_diagnostics
 
 
 class _JudgeBoundary:
@@ -38,8 +39,10 @@ class _JudgeBoundary:
 
     def __init__(self, failure=None):
         self.failure = failure
+        self.inputs = []
 
     def invoke(self, messages):
+        self.inputs.append(messages)
         if self.failure == "invocation_error":
             raise ConnectionError("judge service unavailable")
         payload = {
@@ -61,7 +64,8 @@ def _config():
     }}})
 
 
-def _response_payload(*, forbidden_phase=None, execution_evidence=True, semantic_checks=None):
+def _response_payload(*, forbidden_phase=None, execution_evidence=True, semantic_checks=None,
+                      validation_diagnostics=None):
     source_text = "pandas.merge combines rows from two DataFrames by matching columns."
     snapshot = build_snapshot(
         source_uri="https://pandas.pydata.org/docs/", title="pandas.merge",
@@ -116,6 +120,8 @@ def _response_payload(*, forbidden_phase=None, execution_evidence=True, semantic
             "schema_version": 1, "execution_id": "req-1", "status": "complete", "events": events,
         } if execution_evidence else None,
     )
+    if validation_diagnostics is not None:
+        debug.validation_diagnostics = validation_diagnostics
     return {
         "response": SourcedAnswerPayload.from_answer(answer).model_dump(mode="json"),
         "execution_id": "req-1", "trace": "Execution ID: req-1",
@@ -124,7 +130,7 @@ def _response_payload(*, forbidden_phase=None, execution_evidence=True, semantic
 
 
 def _case_result(index=0, *, judge_failure=None, missing_response=False, save_required=False,
-                 prior_turns=None, **response_options):
+                 prior_turns=None, judge_boundary=None, **response_options):
     prior_turns = prior_turns or []
     case = BenchmarkCase(
         case_id=f"case-{index}", category="docs_only", query="pandas merge는 어떻게 동작해?",
@@ -140,7 +146,7 @@ def _case_result(index=0, *, judge_failure=None, missing_response=False, save_re
     )
     judge = LLMJudge(model_name="fixture-judge", enabled=False)
     judge.enabled = True
-    judge.client = _JudgeBoundary(judge_failure)
+    judge.client = judge_boundary if judge_boundary is not None else _JudgeBoundary(judge_failure)
     parsed = (
         ParsedResponseData(runtime_errors=["request timeout"])
         if missing_response else parse_agent_response(_response_payload(**response_options))
@@ -177,6 +183,24 @@ def test_complete_authorized_evaluation_can_release():
     assert pair[1].composite_quality_score == pytest.approx(1.0)
     assert pair[1].release_pass is True
     assert _summary([pair]).overall_passed is True
+
+
+def test_recorded_rejected_draft_does_not_change_final_answer_judging_or_release():
+    diagnostics = rejected_answer_diagnostics()
+    boundary = _JudgeBoundary()
+    _, baseline = _case_result(judge_boundary=boundary)
+    _, observed = _case_result(judge_boundary=boundary, validation_diagnostics=diagnostics)
+
+    assert len(boundary.inputs) == 2
+    assert boundary.inputs[0] == boundary.inputs[1]
+    assert observed.response == baseline.response
+    assert observed.rule_scores == baseline.rule_scores
+    assert observed.llm_judge_score == baseline.llm_judge_score
+    assert observed.cost_usd == baseline.cost_usd
+    assert observed.product_pass is baseline.product_pass is True
+    assert observed.judge_pass is baseline.judge_pass is True
+    assert observed.release_pass is baseline.release_pass is True
+    assert observed.debug["validation_diagnostics"] == diagnostics.model_dump(mode="json")
 
 
 @pytest.mark.parametrize("probability", [0.99, 0.2])

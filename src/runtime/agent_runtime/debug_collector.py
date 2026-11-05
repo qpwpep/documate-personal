@@ -7,6 +7,7 @@ from src.core.contracts.debug import ActionResults, DebugPayload, ErrorCode, Ret
 from src.core.contracts.graph_state import GraphState
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import validate_route_decisions
+from src.core.contracts.validation_diagnostics import ValidationDiagnostics
 from src.core.contracts.boundary.debug import get_debug_state
 from src.core.contracts.boundary.graph import get_retry_state
 from src.core.contracts.boundary.planner import get_planner_state
@@ -16,6 +17,7 @@ from src.core.evidence import dedupe_search_hits
 from src.core.latency import build_latency_breakdown
 from src.runtime.agent_runtime.tool_execution import current_execution_evidence
 from src.runtime.agent_runtime.llm_usage import current_llm_calls
+from src.runtime.agent_runtime.validation_diagnostics import current_validation_diagnostics
 
 
 class DebugCollector:
@@ -100,6 +102,12 @@ class DebugCollector:
             missing_required_debug_fields.append("route_decisions")
             debug_errors.append(f"route_decisions invalid: {exc}")
         calls = current_llm_calls()
+        try:
+            validation_diagnostics = current_validation_diagnostics()
+        except (TypeError, ValueError):
+            validation_diagnostics = ValidationDiagnostics(schema_version=1, evidence={}, observations=[])
+            missing_required_debug_fields.append("validation_diagnostics")
+            debug_errors.append("validation diagnostics could not be serialized")
         planner_errors = list(state_debug.planner_errors)
 
         execution_evidence = current_execution_evidence()
@@ -149,6 +157,7 @@ class DebugCollector:
             llm_calls=calls, llm_diagnostics=list(state_debug.llm_diagnostics),
             errors=debug_errors, error_codes=error_codes,
             validation_events=list(state_debug.validation_events), route_decisions=route_decisions,
+            validation_diagnostics=validation_diagnostics,
             memory_compactions=list(state_debug.memory_compactions), planner_errors=planner_errors,
             observed_hits=observed_hits, answer_provenance=answer_provenance,
             retry_context=retry_context, retrieval_diagnostics=retrieval_diagnostics,

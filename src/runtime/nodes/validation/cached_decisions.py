@@ -9,6 +9,7 @@ from src.core.contracts.graph_state import DecisionCacheEntry
 from src.core.decisions import DecisionResult, decision_fingerprint
 from src.runtime.nodes.validation.decision_input import encode_decision_input
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
+from src.runtime.agent_runtime.validation_diagnostics import record_decisions
 
 
 class DecisionEvaluator(Protocol):
@@ -57,6 +58,13 @@ def evaluate_cached_jobs(
             cache_hits += 1
         else:
             pending[job.fingerprint] = job
+    cached_names = {job.name for job in jobs if job.fingerprint in cache}
+    record_decisions(DecisionResult(
+        probabilities={job.name: cache[job.fingerprint].probability for job in jobs
+                       if job.fingerprint in cache and cache[job.fingerprint].probability is not None},
+        refused_names={job.name for job in jobs
+                       if job.fingerprint in cache and cache[job.fingerprint].probability is None},
+    ), cached_names=cached_names)
     if pending:
         entries = []
         questions = []
@@ -89,4 +97,6 @@ def evaluate_cached_jobs(
         "avoided_questions": len(jobs) - len(pending), "requested_questions": len(jobs),
         "evaluate_calls": int(bool(pending)),
     })
-    return DecisionResult(probabilities=probabilities, refused_names=refused)
+    result = DecisionResult(probabilities=probabilities, refused_names=refused)
+    record_decisions(result, cached_names=cached_names)
+    return result

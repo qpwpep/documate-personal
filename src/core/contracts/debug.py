@@ -10,6 +10,7 @@ from src.core.contracts.tool_execution import ToolExecutionEvidence
 from src.core.contracts.usage import (
     LLMCallPath, LLMCallRecord, LLMCallStage, normalize_token_usage,
 )
+from src.core.contracts.validation_diagnostics import ValidationDiagnostics
 from src.core.slack_contract import SlackDelivery
 from src.core.planner_schema import RetrievalTask
 from src.core.evidence import SearchHit
@@ -73,7 +74,7 @@ RETRYABLE_REASONS: set[RetryReason] = {
     "missing_content",
     "missing_route_coverage",
 }
-DEBUG_SCHEMA_VERSION = 14
+DEBUG_SCHEMA_VERSION = 15
 # Historical diagnostics can contain retired routes; these never enable execution.
 RECORDED_ROUTE_ORDER: tuple[str, ...] = ("docs", "upload", "local")
 DebugObservabilityStatus = Literal["ok", "degraded", "failed"]
@@ -94,6 +95,7 @@ DEBUG_REQUIRED_FIELDS: tuple[str, ...] = (
     "latency_breakdown",
     "route_decisions",
     "memory_compactions",
+    "validation_diagnostics",
 )
 DEBUG_CRITICAL_FIELDS: tuple[str, ...] = (
     "schema_version",
@@ -221,6 +223,9 @@ class DebugDiagnostics(BaseModel):
     errors: list[str] = Field(default_factory=list)
     error_codes: list[ErrorCode] = Field(default_factory=list)
     validation_events: list[str] = Field(default_factory=list)
+    validation_diagnostics: ValidationDiagnostics = Field(default_factory=lambda: ValidationDiagnostics(
+        schema_version=1, evidence={}, observations=[],
+    ))
     memory_compactions: list[dict[str, Any]] = Field(default_factory=list)
     planner_errors: list[str] = Field(default_factory=list)
     observed_hits: list[dict[str, Any]] = Field(default_factory=list)

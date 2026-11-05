@@ -7,6 +7,7 @@ from typing import Any
 from src.core.answer_schema.models import validated_evidence_by_id
 from src.core.answer_export import exact_copy_ready, input_copy_snapshot
 from src.core.contracts.graph_state import EvidenceVerdict, PreparedEvidence, PreparedEvidencePacket
+from src.core.contracts.validation_diagnostics import DiagnosticPredicate
 from src.core.decisions import DecisionResult, decision_fingerprint, evidence_plan_fingerprint, prepared_packet_fingerprint
 from src.core.evidence import SearchHit
 from src.core.planner_schema import RetrievalTask
@@ -22,6 +23,10 @@ from src.runtime.nodes.validation.cached_decisions import CachedDecisionJob, dec
 from src.runtime.nodes.validation.semantic import (
     REQUIREMENT_CRITERIA,
     DecisionEvaluator, _require_bound_source, _source, scoped_evidence_instructions, semantic_task_input,
+)
+from src.runtime.agent_runtime.validation_diagnostics import (
+    current_validation_observation, mark_validation_skipped, record_candidates, record_packet, register_predicates,
+    record_candidate_context, record_semantic_tasks,
 )
 
 
@@ -150,6 +155,17 @@ def _evaluate_cached(
         job["fingerprint"] = fingerprint
         cached_jobs.append(CachedDecisionJob(name=job["name"], entry_name=job["entry_name"],
             entry=job["entry"], instructions=_job_instructions(job), fingerprint=fingerprint))
+    observations = []
+    for job in jobs:
+        packet_mode = None
+        if collection == "requirements":
+            packet_mode = "compact" if job["name"].startswith("compact_") else "normal"
+        observations.append(DiagnosticPredicate(
+            name=job["name"], criterion=job["rubric"],
+            requirement_id=job["entry"]["task"]["requirement_id"],
+            evidence_id=job["entry"].get("source", {}).get("id"), packet_mode=packet_mode,
+        ))
+    register_predicates(observations)
     return evaluate_cached_jobs(snapshot=snapshot, assessment=assessment, decisions_client=decisions_client,
         jobs=cached_jobs, collection=collection, stage="pre_synthesis_validation", attempt=attempt,
         reserve_calls=reserve_calls, encode_input=encode_decision_input)
@@ -226,6 +242,8 @@ def _assess_sources(snapshot, assessment, *, decisions_client, threshold, attemp
     for index, (key, hit) in enumerate(candidates.items()):
         task = tasks[key[0]]
         entry = _source_entry(hit, task, snapshot, code_context)
+        record_candidate_context(hit.requirement_id, hit.evidence.id,
+                                 [source["id"] for source in entry.get("context_sources", [])])
         labels = [
             ("relevance", None),
             *((f"need:{need}", f"tasks[entry.task_id].requirement.evidence_needs[{need_index}]")
@@ -316,6 +334,9 @@ def prepare_answer_evidence(
                 "failed_requirement_ids": sorted(assessment.failed_requirement_ids),
             }), "compact": None,
         })
+    observation = current_validation_observation()
+    if observation is not None:
+        observation.failed_requirement_ids = sorted(assessment.failed_requirement_ids)
     return EvidencePreparationResult(
         prepared_evidence=prepared,
         accepted_hits=assessment.accepted_hits,
@@ -336,6 +357,8 @@ def _assess_pre_semantics(
     decisions_client: DecisionEvaluator, threshold: float, attempt: int,
     excerpt_limits: ExcerptLimits,
 ) -> PreparedEvidence:
+    record_semantic_tasks([task.model_copy(update={"query": semantic_task_input(task, snapshot)["query"]})
+                           for task in snapshot.planner_output.tasks])
     _require_bound_source(snapshot, stage="pre_synthesis_validation")
     contract = snapshot.request_contract
     input_copy = contract is not None and contract.body.kind == "copy_input"
@@ -346,6 +369,9 @@ def _assess_pre_semantics(
         packet = [citation.evidence for citation in source.citations]
         prepared = PreparedEvidencePacket(evidence=packet,
             fingerprint=prepared_packet_fingerprint(packet, {}))
+        record_packet("normal", packet, {})
+        record_packet("compact", packet, {})
+        mark_validation_skipped("deterministic_exact_copy")
         return PreparedEvidence(
             request_id=snapshot.request_contract.request_id,
             contract_revision=snapshot.request_contract.revision,
@@ -376,8 +402,9 @@ def _assess_pre_semantics(
                     or sum(len(item.excerpt) for item in binding_sources) > normal_budget.max_total_excerpt_chars
                     or len(binding_sources) > normal_budget.max_items):
                 return False
+        entry = _source_entry(hit, task, snapshot, code_context)
         fingerprint = _question_fingerprint({
-            "entry": _source_entry(hit, task, snapshot, code_context),
+            "entry": entry,
             "instructions": SOURCE_RELEVANCE_INSTRUCTIONS,
             "rubric": "source_relevance",
         }, model=decisions_client.model_name)
@@ -397,11 +424,23 @@ def _assess_pre_semantics(
                                     "rubric": "source_relevance", "instructions": SOURCE_RELEVANCE_INSTRUCTIONS,
                                 })])),
         )
+        # A cached rejection still explains why retrieved evidence was excluded.
+        # Keep it even when no new model question is issued for this candidate.
+        record_candidates([hit])
+        record_candidate_context(hit.requirement_id, hit.evidence.id,
+                                 [source["id"] for source in entry.get("context_sources", [])])
+        register_predicates([DiagnosticPredicate(
+            name=f"cached_source_{fingerprint}", criterion="source_relevance",
+            requirement_id=hit.requirement_id, evidence_id=hit.evidence.id,
+            status="refused" if cached.probability is None else "evaluated",
+            probability=cached.probability, cached=True,
+        )])
         return False
 
     candidates = prepare_evidence_candidates(user_input=snapshot.user_input, hits=snapshot.parsed_hits,
                                              planner_output=snapshot.planner_output, budget=normal_budget,
                                              include_candidate=include_candidate)
+    record_candidates(candidates)
     question_limit, source_reserve, recovery_reserve = _source_question_capacity(
         snapshot, decisions_client=decisions_client, attempt=attempt,
     )
@@ -448,6 +487,7 @@ def _assess_pre_semantics(
                          "rubric": criterion} for criterion, instructions in REQUIREMENT_CRITERIA)
         packets[mode] = PreparedEvidencePacket(evidence=packet, requirement_map=requirement_map,
             fingerprint=prepared_packet_fingerprint(packet, requirement_map))
+        record_packet(mode, packet, requirement_map)
     decisions = _evaluate_cached(snapshot=snapshot, assessment=assessment, decisions_client=decisions_client,
                                  jobs=jobs, collection="requirements", attempt=attempt,
                                  reserve_calls=recovery_reserve)
@@ -462,6 +502,7 @@ def _assess_pre_semantics(
                 if task.requirement_id not in failed:
                     failed.append(task.requirement_id)
         packets[mode] = packet.model_copy(update={"failed_requirement_ids": failed})
+        record_packet(mode, packet.evidence, packet.requirement_map, failed)
     normal, compact = packets["normal"], packets["compact"]
     normal_usable = not normal.failed_requirement_ids
     compact_usable = not compact.failed_requirement_ids
@@ -472,6 +513,9 @@ def _assess_pre_semantics(
         normal = compact
         assessment.cache_observations.append({"phase": "packet_selection", "selected": "compact",
             "normal_failed_requirement_ids": packets["normal"].failed_requirement_ids})
+    observation = current_validation_observation()
+    if observation is not None:
+        observation.selected_packet_mode = "compact" if not normal_usable and compact_usable else "normal"
     assessment.failed_requirement_ids.update(normal.failed_requirement_ids)
     assessment.failed_routes.update(task.route for task in snapshot.planner_output.tasks
                                     if task.requirement_id in assessment.failed_requirement_ids)

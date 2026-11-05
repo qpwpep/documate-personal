@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
+
+from pydantic import ValidationError
 
 from src.core.answer_schema import AnswerResponse, ActionReceipt, export_answer_text
 from src.core.answer_schema.wire import SourcedAnswerPayload
@@ -15,6 +18,7 @@ from src.core.contracts.usage import LLMCallRecord
 from src.core.contracts.provenance import AnswerProvenance
 from src.core.contracts.routing import RoutingDecision, validate_route_decisions
 from src.core.contracts.tool_execution import ToolExecutionEvidence
+from src.core.contracts.validation_diagnostics import ValidationDiagnostics
 from src.core.evidence import SearchHit
 from src.core.latency import LatencyBreakdownModel
 from ..result_models import EvidenceAssessment
@@ -45,6 +49,7 @@ class ParsedResponseData:
     llm_calls: list[LLMCallRecord] | None = None
     error_codes: list[str] = field(default_factory=list)
     validation_events: list[str] = field(default_factory=list)
+    validation_diagnostics: ValidationDiagnostics | None = None
     route_decisions: list[RoutingDecision] = field(default_factory=list)
     memory_compactions: list[dict[str, Any]] = field(default_factory=list)
     planner_errors: list[str] = field(default_factory=list)
@@ -321,6 +326,19 @@ def parse_agent_response(
             label="debug.validation_events",
             response_errors=parsed.response_errors,
         )
+        try:
+            # JSON mode preserves tuple-based domain contracts while rejecting
+            # malformed diagnostic values at this external boundary.
+            parsed.validation_diagnostics = ValidationDiagnostics.model_validate_json(
+                json.dumps(debug_payload.get("validation_diagnostics")), strict=True,
+            )
+        except (TypeError, ValidationError) as exc:
+            parsed.response_errors.append(f"debug.validation_diagnostics invalid: {exc}")
+            parsed.debug_observability_status = "failed"
+            if "validation_diagnostics" not in parsed.missing_required_debug_fields:
+                parsed.missing_required_debug_fields.append("validation_diagnostics")
+            if "DEBUG_NORMALIZATION_FAILED" not in parsed.error_codes:
+                parsed.error_codes.append("DEBUG_NORMALIZATION_FAILED")
         try:
             parsed.route_decisions = validate_route_decisions(debug_payload.get("route_decisions"))
         except ValueError as exc:

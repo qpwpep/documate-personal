@@ -13,6 +13,7 @@ from src.core.answer_schema.model_references import remap_document_source_refere
 from src.core.answer_schema.models import CodeBlock, HeadingBlock, ListBlock, ParagraphBlock, TableBlock
 from src.core.answer_export import exact_copy_ready, input_copy_snapshot
 from src.core.decisions import DecisionResult
+from src.core.contracts.validation_diagnostics import DiagnosticPredicate
 from src.core.evidence import EvidenceRef
 from src.core.evidence_prompt import (
     source_line_prompt_records, source_location_prompt_records, source_scope_prompt_record,
@@ -27,6 +28,10 @@ from src.core.request_bodies import ExtractBody
 from src.infra.tools.docs_search.policy import is_current_stable_doc_url
 from src.runtime.nodes.validation.cached_decisions import (
     CachedDecisionJob, DecisionEvaluator, decision_job_fingerprint, evaluate_cached_jobs, uncached_job_count,
+)
+from src.runtime.agent_runtime.validation_diagnostics import (
+    mark_validation_skipped, record_decisions, register_predicates,
+    record_semantic_tasks, current_validation_observation,
 )
 from src.runtime.nodes.validation.models import ValidationAssessment, ValidationSnapshot
 from src.runtime.source_scope import documentation_declaration_scope
@@ -523,12 +528,16 @@ def assess_post_semantics(
     decisions_client: DecisionEvaluator, threshold: float, attempt: int,
 ) -> None:
     """Evaluate the response and source packet checked by assess_validation."""
+    record_semantic_tasks([task.model_copy(update={"query": semantic_task_input(task, snapshot)["query"]})
+                           for task in snapshot.planner_output.tasks])
     result = assessment.checked_result
     if result is None or snapshot.response_kind in {"clarification", "acknowledgement", "failure"}:
+        mark_validation_skipped("no_answer_body_to_validate")
         return
     if any(issue == "sentence_scope" or issue.startswith("sentence_count:")
            for issue in assessment.missing_content):
         # A model probability cannot repair a deterministic quota violation.
+        mark_validation_skipped("deterministic_contract_failure")
         return
     _require_bound_source(snapshot, stage="post_synthesis_validation")
     body = snapshot.request_contract.body if snapshot.request_contract else None
@@ -540,6 +549,10 @@ def assess_post_semantics(
             assessment.missing_content.append("transform_unchanged")
             assessment.retry_reason = "missing_content"
             assessment.error_codes.append("VALIDATION_MISSING_CONTENT")
+            observation = current_validation_observation()
+            if observation is not None:
+                observation.local_failures.append("transform_unchanged")
+            mark_validation_skipped("unchanged_transformation")
             return
     input_copy = body is not None and body.kind == "copy_input"
     literal_copy = body is not None and body.kind in {"copy_input", "copy_answer"}
@@ -554,11 +567,13 @@ def assess_post_semantics(
         if input_copy:
             # This proves fidelity, not the factual truth of the quoted text.
             # Do not manufacture a semantic probability for a local comparison.
+            mark_validation_skipped("deterministic_exact_copy")
             return
         if result.model_dump(exclude={"actions"}) != source.model_dump(exclude={"actions"}):
             raise LLMCallError(make_problem("model_output_invalid", "post_synthesis_validation"))
         # Retain the original semantic report, including limits on a previously
         # displayed partial answer. This check certifies copying, not new claims.
+        mark_validation_skipped("deterministic_exact_copy")
         return
     copy_fidelity_verified = literal_copy and not snapshot.retrieval_required
     sources = assessment.checked_evidence_by_id
@@ -815,10 +830,20 @@ def assess_post_semantics(
                 fingerprint=decision_job_fingerprint(collection="requirements", entry=entry,
                     instructions=instructions, model=decisions_client.model_name),
             ))
+            register_predicates([DiagnosticPredicate(name=f"{name}_{criterion}", criterion=criterion,
+                requirement_id=task.requirement_id, packet_mode="used")])
     if not questions and not requirement_jobs:
         # Local copying and quota checks can discharge every obligation.
         # No model probability or empty semantic report is needed in that case.
+        mark_validation_skipped("deterministic_body_validation")
         return
+    unit_ids = {f"grounded_{index}": unit_id for index, (unit_id, _unit) in grounded_units.items()}
+    unit_ids.update({f"citations_{index}": unit_id for index, unit_id in citation_units.items()})
+    unit_criteria = {"grounded": "grounded", "citations": "citation_relevance"}
+    register_predicates([DiagnosticPredicate(
+        name=question["name"], criterion=unit_criteria.get(question["name"].partition("_")[0], question["name"]),
+        unit_id=unit_ids.get(question["name"]), packet_mode="used",
+    ) for question in questions])
     predicates = _post_predicate_instructions(questions, sources_by_question)
     source_unit_names = {f"grounded_{index}" for index, (_unit_id, unit) in grounded_units.items()
                          if unit.basis in {"source", "excerpt", "inference"}}
@@ -890,6 +915,7 @@ def assess_post_semantics(
             questions=unit_questions, stage="post_synthesis_validation", attempt=attempt,
             reserve_calls=remaining_source_calls + body_calls + requirement_calls,
         )
+        record_decisions(result_for_unit)
         source_probabilities.update(result_for_unit.probabilities)
         source_refusals.update(result_for_unit.refused_names)
     source_decisions = DecisionResult(probabilities=source_probabilities, refused_names=source_refusals)
@@ -898,11 +924,13 @@ def assess_post_semantics(
         questions=body_predicates, stage="post_synthesis_validation", attempt=attempt,
         reserve_calls=operation_calls + requirement_calls,
     ) if body_predicates else DecisionResult(probabilities={}, refused_names=set())
+    record_decisions(body_decisions)
     operation_decisions = decisions_client.evaluate(
         input=json.dumps(operation_input, ensure_ascii=False),
         questions=operation_predicates, stage="post_synthesis_validation", attempt=attempt,
         reserve_calls=requirement_calls,
     ) if operation_predicates else DecisionResult(probabilities={}, refused_names=set())
+    record_decisions(operation_decisions)
     # Cited evidence must satisfy its own resolved task. Mixing the whole body
     # request into this judgment can reject a known value because a different
     # requested value is unavailable. Body fulfillment still sees full context.

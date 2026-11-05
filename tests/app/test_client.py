@@ -11,8 +11,11 @@ from urllib3.exceptions import ReadTimeoutError
 from src.app.client import AgentRequestContext, AgentSessionClient
 from src.app.transport_contracts import AgentResponse
 from src.core.answer_schema import finalize_answer, text_document
+from src.core.contracts.debug import DebugPayload
+from src.core.llm_errors import make_problem
 from src.core.uploads import UploadManifest
 from src.core.slack_contract import RecipientInput
+from tests.validation_diagnostic_fixtures import rejected_answer_diagnostics
 
 
 def frame(event, data):
@@ -169,4 +172,43 @@ def test_client_preserves_incomplete_slack_form_input_for_action_validation(tran
 
     assert events[-1].result.response == answer
     assert json.loads(response.request.body)["slack_recipient"] == {"kind": "channel", "value": ""}
+    assert len(sent) == 1
+
+
+def test_validation_failure_keeps_debug_without_creating_an_answer(transport, client):
+    diagnostics = rejected_answer_diagnostics()
+    payload = AgentResponse(
+        status="failed", problem=make_problem("answer_validation_failed", "validation"),
+        execution_id="validation-failure", upload_manifest=client.manifest,
+        trace="Execution ID: validation-failure", debug=DebugPayload(validation_diagnostics=diagnostics),
+    ).model_dump(mode="json")
+    _, sent = transport([frame("final_response", payload)])
+
+    events = list(client.stream("검증할 질문"))
+
+    assert [event.event for event in events] == ["final_response"]
+    result = events[0].result
+    assert result.status == "failed"
+    assert result.response is None
+    assert result.problem.code == "answer_validation_failed"
+    assert result.debug.validation_diagnostics == diagnostics
+    assert events[0].data == payload
+    assert len(sent) == 1
+
+
+def test_malformed_validation_diagnostics_reject_final_response_and_keep_raw_envelope(transport, client):
+    payload = AgentResponse(
+        status="failed", problem=make_problem("answer_validation_failed", "validation"),
+        execution_id="malformed-validation", upload_manifest=client.manifest,
+        trace="Execution ID: malformed-validation", debug=DebugPayload(),
+    ).model_dump(mode="json")
+    payload["debug"]["validation_diagnostics"] = {"schema_version": 1, "observations": []}
+    _, sent = transport([frame("final_response", payload)])
+
+    events = list(client.stream("검증할 질문"))
+
+    assert [event.event for event in events] == ["error"]
+    assert events[0].result is None
+    assert events[0].data["raw_final_response"] == payload
+    assert client.manifest is None
     assert len(sent) == 1

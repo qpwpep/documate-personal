@@ -17,6 +17,10 @@ from src.runtime.nodes.validation.models import ValidationAssessment, Validation
 from src.runtime.nodes.validation.policy import add_retrieval_gap_issues, apply_validation_outcome
 from src.runtime.nodes.validation.snapshot import collect_validation_snapshot, detect_packet_coverage_gaps
 from src.runtime.nodes.validation.semantic import DecisionEvaluator, assess_post_semantics
+from src.runtime.nodes.validation.diagnostics import (
+    observe_filtered_validation, observe_validation_node, record_assessment,
+)
+from src.runtime.agent_runtime.validation_diagnostics import mark_validation_skipped
 
 
 logger = logging.getLogger(__name__)
@@ -146,12 +150,15 @@ def make_post_synthesis_validation_node(
     verbose: bool, *, decisions_client: DecisionEvaluator, pass_threshold: float = 0.8,
     max_turns: int = 6,
 ):
+    @observe_validation_node(stage="post_synthesis_validation", model=decisions_client.model_name,
+                             threshold=pass_threshold)
     def post_synthesis_validation(state: GraphState) -> GraphState:
         response = get_response_state(state)
         debug = get_debug_state(state)
         retry_context = get_retry_state(state)
 
         if response.problem is not None:
+            mark_validation_skipped("existing_response_problem")
             if retry_context.terminal_failed_requirement_ids:
                 snapshot, _local_errors = collect_validation_snapshot(state, max_turns=max_turns)
                 response = response.model_copy(update={
@@ -169,10 +176,12 @@ def make_post_synthesis_validation_node(
 
         snapshot, local_errors = collect_validation_snapshot(state, max_turns=max_turns)
         assessment = assess_validation(snapshot)
+        record_assessment(assessment)
         assess_post_semantics(
             snapshot, assessment, decisions_client=decisions_client,
             threshold=pass_threshold, attempt=max(1, response.synthesis_attempt),
         )
+        record_assessment(assessment, local=False)
         needs_retry, next_retry_context, retrieval_feedback, retry_errors = _decide_retry_outcome(
             snapshot=snapshot,
             assessment=assessment,
@@ -219,11 +228,15 @@ def make_post_synthesis_validation_node(
                 evidence_requirement_map=final_response.evidence_requirement_map,
                 decision_cache=assessment.decision_cache or snapshot.decision_cache,
             )
-            revised_assessment = assess_validation(revised_snapshot)
-            assess_post_semantics(
-                revised_snapshot, revised_assessment, decisions_client=decisions_client,
-                threshold=pass_threshold, attempt=max(1, response.synthesis_attempt),
-            )
+            with observe_filtered_validation(revised_snapshot, model=decisions_client.model_name,
+                    threshold=pass_threshold, attempt=max(1, response.synthesis_attempt)):
+                revised_assessment = assess_validation(revised_snapshot)
+                record_assessment(revised_assessment)
+                assess_post_semantics(
+                    revised_snapshot, revised_assessment, decisions_client=decisions_client,
+                    threshold=pass_threshold, attempt=max(1, response.synthesis_attempt),
+                )
+                record_assessment(revised_assessment, local=False)
             semantic_assessments.append(("filtered", revised_assessment))
             # A second rejection must remove the newly rejected claims as well.
             # Stop bounded recovery with an explicit failure;
