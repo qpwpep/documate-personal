@@ -721,7 +721,10 @@ benchmark의 Python 클라이언트는 `path` 기반 sync를 사용합니다. �
 - `retry_context`
 - `retrieval_diagnostics`
 - `planner_diagnostics`
+- `validation_diagnostics`
 - `action_results`
+
+`validation_diagnostics`는 공통 근거 registry와 검증 관측 목록을 담습니다. 각 관측은 단계·시도·본문 revision, 요청 계약, 검색 task와 실제 의미 판정 task, 후보·맥락 근거, 일반/compact/실제 사용 packet, 후보 본문·hash, 개별 predicate의 조건·확률·캐시 여부·refusal·미판정 상태, 로컬 실패와 예외 종류를 보존합니다. 본문과 원문은 `debug=true` 응답에만 포함되며 제품 답변이나 일반 로그로 보내지 않습니다. 기록은 graph 상태 commit과 독립적으로 수집하므로 뒤의 노드나 Decisions batch가 실패해도 앞서 관측한 값이 남습니다. 관측의 `completed`는 검사가 끝났다는 뜻이며 본문 승인을 뜻하지 않습니다. 진단 직렬화 실패는 관측 실패로 표시하고 제품 결과를 바꾸지 않습니다. 저장 결과에서 원인별 신호와 독립 검토 표본을 추출하는 절차는 [벤치마크 진단](benchmarking.md#28-실패-원인-진단과-독립-표본-검토)을 따릅니다.
 
 `route_decisions`는 이번 graph 실행에서 확정한 분기 결과를 순서대로 보존합니다. 각 항목은 `sequence`(1부터 증가), 실제 노드명인 `source`·`target`, 판단 사유 `reason`으로 구성됩니다. `add_user_message`, `planner`, `pre_synthesis_validation`, `post_synthesis_validation`이 분기를 소유하며, 고정 edge는 이 목록에 넣지 않습니다. `memory_compactions`는 압축 결과 진단만 담고 분기 이력과 분리합니다.
 
@@ -729,7 +732,7 @@ benchmark의 Python 클라이언트는 `path` 기반 sync를 사용합니다. �
 
 결정 기록은 다음 노드 선택이 상태에 반영되었다는 뜻이며 다음 노드의 완료를 보장하지 않습니다. 다음 노드가 실패해도 이미 확정된 목록은 오류 debug에 남습니다. runner는 `stream_mode="values"`의 마지막 상태를 교체 보관하므로 누적 스냅샷을 다시 이어 붙이지 않습니다. graph 실행 전 실패와 종료 요청의 빈 목록은 정상이며, 관측 경계에서 누락되거나 잘못된 목록은 `observability_status="failed"`, `missing_required_debug_fields`, 정규화 오류로 드러납니다. 현재 보장 범위는 프로세스 내 실행이며 강제 종료 후 영속 복구나 replay는 포함하지 않습니다.
 
-현재 debug schema version은 `14`입니다. 사용량의 단일 계약은 `src/core/contracts/usage.py`의 `LLMCallRecord`·`TokenUsage`입니다. 호출별로 `stage`, 단계별 시도 `attempt`, `path`, `model_name`, `endpoint`, `status`, `latency_ms`, `failure_type`, `usage`를 기록합니다. `status`는 호출 시작·완료·실패를 구분하며, 실패 종류는 예외 이름만 남깁니다. `usage.input_tokens`·`output_tokens`와 세부 사용량 `cached_input_tokens`·`cache_write_input_tokens`·`reasoning_output_tokens`는 0 이상의 정수 또는 `null`이며, 0·누락·부분 관측을 구별합니다. 캐시 읽기·쓰기는 전체 입력의 부분집합이고 reasoning은 전체 출력의 부분집합이므로 합계에 다시 더하지 않습니다. bool·음수·숫자 문자열·소수는 토큰으로 변환하지 않습니다. 사용량과 total의 충돌·잘못된 값·전체보다 큰 세부 사용량은 `usage.issues`에 남깁니다. 원본 `usage_metadata`·`response_metadata`도 진단용으로 보존하지만 collector·HTTP·eval은 이를 다시 해석하지 않습니다.
+현재 debug schema version은 `15`입니다. 사용량의 단일 계약은 `src/core/contracts/usage.py`의 `LLMCallRecord`·`TokenUsage`입니다. 호출별로 `stage`, 단계별 시도 `attempt`, `path`, `model_name`, `endpoint`, `status`, `latency_ms`, `failure_type`, `usage`를 기록합니다. `status`는 호출 시작·완료·실패를 구분하며, 실패 종류는 예외 이름만 남깁니다. `usage.input_tokens`·`output_tokens`와 세부 사용량 `cached_input_tokens`·`cache_write_input_tokens`·`reasoning_output_tokens`는 0 이상의 정수 또는 `null`이며, 0·누락·부분 관측을 구별합니다. 캐시 읽기·쓰기는 전체 입력의 부분집합이고 reasoning은 전체 출력의 부분집합이므로 합계에 다시 더하지 않습니다. bool·음수·숫자 문자열·소수는 토큰으로 변환하지 않습니다. 사용량과 total의 충돌·잘못된 값·전체보다 큰 세부 사용량은 `usage.issues`에 남깁니다. 원본 `usage_metadata`·`response_metadata`도 진단용으로 보존하지만 collector·HTTP·eval은 이를 다시 해석하지 않습니다.
 
 응답 생성 경계에서 입력·출력 총량은 보존된 제공자 원본 `response_metadata.token_usage`를 기준으로 삼습니다. Chat Completions의 원본에 출력 사용량이 없으면 SDK가 채운 기본값 0을 관측값으로 사용하지 않습니다. 원본이 없을 때는 `usage_metadata`를 사용하며, 캐시·reasoning 세부 값은 `usage_metadata` → 원본 상세 순서로 해석합니다. 후보 내부에서는 `input_tokens` → `prompt_tokens`, `output_tokens` → `completion_tokens` 순서로 유효한 첫 값을 택하며 명시된 0은 뒤의 값으로 대체하지 않습니다. provider total로 입력이나 출력을 역산하지 않습니다. 합계는 입력·출력이 모두 관측됐을 때만 계산합니다. 선택형 Responses 경로는 LangChain 변환이 제공자 원본 usage를 보존하지 않아 실제 누락과 SDK 기본값 0을 구별하는 데 한계가 있습니다.
 

@@ -337,6 +337,32 @@ uv run --locked python script/benchmark_llm_tokens.py \
 
 [`script/benchmark_decisions_ab.py`](../script/benchmark_decisions_ab.py)는 캡처한 Decisions 입력에 표현만 바꿔 재평가하는 별도 진단입니다. `--input <provider_inputs.jsonl> --output <새 디렉터리> --scenario docs_single --repeats 2`로 실행합니다. 기본 `--mode displayed`는 canonical unit 참조, 본문을 직접 담은 표현, 그 표현에 정책까지 맞춘 입력을 비교합니다. `--mode sources`는 canonical source 참조, `source_lines.text` 복원, 요구별 source를 중복 배치한 입력을 비교합니다. 고정 payload의 표현 영향을 분리하는 실험이며 전체 요청의 품질 평가를 대신하지 않습니다. 진단 호출·비용은 주요 전후 실행 합계와 별도로 남깁니다.
 
+### 2.8 실패 원인 진단과 독립 표본 검토
+
+`diagnose`는 완료한 run의 원시 결과 fingerprint를 확인하고, 검증 중 관측한 실패 신호와 검토 표본을 새 JSON에 저장합니다. 기본 실행은 모델·서버를 호출하지 않습니다.
+
+```bash
+uv run python -m src.eval.main diagnose \
+  --run output/benchmarks/<run_id> \
+  --out output/benchmarks/diagnostics/<run_id>.json \
+  --sample-per-cause 2
+```
+
+원인별 표본은 사례·턴·검증 기록 ID의 hash 순서로 선택하고 중복을 합칩니다. 각 표본은 당시 요청, 요구별 검색·의미 판정 대상, 거절될 수 있는 본문, 정확한 근거 선택 범위와 판정을 보존합니다. 요구에 연결된 주 후보 부재(`candidate_gap`), 선택 범위 누락, 의미 판정 거절, 개별 predicate refusal, 본문 조건·로컬 검사 실패, 미판정 요구, 기술 오류를 관측 신호로 구분하며 한 사례에 여러 신호가 있을 수 있습니다. 주 후보 부재는 검색 실패를 단정하지 않으며 보조 맥락만 있는 경우도 포함합니다. 이는 실제 답변 오류나 모델 오탐을 자동 확정하는 분류가 아닙니다. 정상적인 원문 복사·확인 응답의 검증 생략을 실패로 집계하지 않습니다. 기술 오류가 나도 앞서 끝난 판정과 남은 미판정 항목을 별도로 집계합니다.
+
+독립 모델로 본문 표본을 검토하려면 `--judge`를 지정합니다. benchmark 설정의 judge 모델·입출력 예산과 앱의 API 키를 사용하며 별도 API 비용이 발생합니다.
+
+```bash
+uv run python -m src.eval.main diagnose \
+  --run output/benchmarks/<run_id> \
+  --out output/benchmarks/diagnostics/<run_id>-review.json \
+  --sample-per-cause 2 --judge
+```
+
+독립 검토는 실제 사용 packet과 후보 본문을 기준으로 근거 지지, 본문 요구 충족, 질문과 oracle의 범위 일치를 따로 판단합니다. 런타임 확률과 기존 통과 판정은 검토 모델에 제공하지 않습니다. 본문이나 사용 packet이 없거나 입력 예산을 넘으면 검토하지 않으며, 원문을 잘라 예산에 맞추지 않습니다. 선행 답변을 복사·변환하는 `copy_answer`·`transform_answer`는 이번 진단에 원본 답변 본문이 없으므로 `not_run/input_incomplete`로 남깁니다. 준비 턴에는 최종 질문의 oracle을 적용하지 않습니다. fixture는 실행 manifest의 승인 bytes hash와 일치할 때만 oracle로 사용하며, 파일이 없거나 바뀌었으면 그 상태를 기록합니다.
+
+진단 결과와 독립 검토는 `diagnostic_only`이며 기존 제품·judge·release 판정을 바꾸지 않습니다. 실패 초안을 사용자 답변이나 전달 가능한 본문으로 승격하지 않습니다. 출력 경로는 원래 run 밖의 새 파일이어야 하며 기존 파일은 덮어쓰지 않습니다. 과거 debug에 구조화된 검증 기록이 없으면 `diagnostics_unobserved`로 남기고 자유 텍스트 로그에서 초안이나 판정을 추정해 채우지 않습니다.
+
 ## 3. 출력 산출물
 
 각 run은 `output/benchmarks/<run_id>/` 아래에 저장됩니다. 최신 run 포인터는 run 디렉터리 안이 아니라 `output/benchmarks/` 루트에 저장됩니다. `output/` 전체는 Git 추적 대상이 아닌 로컬 실행 산출물입니다.
@@ -357,6 +383,8 @@ uv run --locked python script/benchmark_llm_tokens.py \
 콘솔은 각 사례의 요약 한 줄 아래에 `product`, `judge`, `release`를 따로 출력하고 즉시 flush합니다. 요약의 `http=200`은 HTTP 응답 상태이며 제품의 처리 성공 여부는 `product.status`에서 확인합니다. 요약의 `composite`는 judge 점수까지 포함한 종합 품질 점수입니다. 제품 줄에는 대상 턴인 `turn`, 내부 처리의 `status`, 오류 코드인 `reason`, 발생 단계인 `stage`를 표시합니다. 보통 `turn=question`이며 준비 턴 실패로 최종 질문을 보내지 못하면 `turn=setup[2]`처럼 마지막 준비 턴의 번호와 결과를 표시하고 최종 질문의 지연은 `latency=n/a`로 남깁니다. `judge.verdict`는 `judge_pass`를 표시하며 미판정은 `n/a`로 남깁니다. 예를 들어 `product: turn=question status=failed reason=answer_validation_failed stage=validation` 뒤의 `judge: status=not_run verdict=n/a reason=product_failure`는 제품 내부 검증에서 답변을 확정하지 못해 judge 채점을 건너뛰었다는 뜻입니다. 반면 `product.status=completed`와 `judge.reason=input_budget_exceeded`는 답변을 받았지만 평가 입력 예산 때문에 채점을 실행하지 못한 경우입니다. `release.reasons`에는 해당 시점의 gate 실패 코드를 표시합니다. 이 사례별 진행 로그는 run 종료 시 저장 산출물을 재검증한 최종 release 판정을 대신하지 않습니다.
 
 `summary.json`의 `judge_model`은 config와 환경 변수 override를 모두 반영해 실제 실행에 적용된 effective judge model입니다.
+
+debug 15의 `validation_diagnostics`는 검증에 사용한 원문 registry와 실행 순서의 관측 기록을 담습니다. 사전 후보·일반/compact packet, 사후 generated/filtered 본문과 hash, 실제 의미 판정 대상·확률·refusal·캐시 여부·미판정 상태, 로컬 실패와 예외 종류를 함께 보존합니다. graph 노드가 예외로 종료돼도 앞서 관측한 입력과 결과는 남습니다. `scenario_turns[*].debug`에 준비 턴과 최종 질문을 각각 저장하므로 마지막 턴의 기록으로 이전 실패를 덮지 않습니다. 진단은 일반 release judge의 입력과 비용 집계에 추가되지 않습니다.
 
 judge 클라이언트에는 앱과 같은 공통 설정의 `AppSettings.openai_api_key`를 명시적으로 전달합니다. 프로젝트 `.env`에 설정한 키도 표준 CLI에서 적용됩니다. judge를 비활성화한 smoke는 judge 클라이언트를 생성하지 않습니다.
 
@@ -445,7 +473,7 @@ receipt는 호출 ID뿐 아니라 종료 상태와도 일치해야 합니다. �
 
 CLI, Markdown 보고서와 history는 같은 중앙 판정을 사용합니다. `run --track release`는 `release_decision`의 통과 여부로 종료 코드 0/1을 정하며, smoke는 judge 실행 여부와 관계없이 진단용입니다. planner 단독 요청 계약 평가의 `qualified`도 전체 release 자격이 아닙니다. 구형 결과의 당시 PASS와 측정값은 현재 자격으로 승격하지 않습니다.
 
-현재 계약의 `report --run`과 history 로더는 저장된 정책 snapshot, 원시 결과의 fingerprint와 중앙 재판정 결과가 summary와 일치하는지 확인합니다. fingerprint는 원시 JSON을 모델로 읽기 전에 확인합니다. 불일치한 산출물은 보고서로 다시 발행하지 않습니다. 결과 로더는 `decision_contract_version=3`, `measurement_contract_version=llm-usage-scenario-v7`, `release-obligations-v10` 조합을 검증합니다. v6에서 도입한 확정 제품 실패의 judge 생략과 필수 대상 수를 유지하며, v7은 로컬에서 검증한 위치의 `verified_location` 저장 표현과 unchecked 집계를 구분합니다. decision v2의 보관 결과와 decision v3/측정 v6의 중간 진단 결과는 알려진 버전 조합과 원시 fingerprint를 확인한 후 history에서 제외합니다. 과거 판정을 새 행동별 관측 규칙으로 재계산하거나 현재 모델로 투영하지 않으며, `report --run`도 구형 결과의 재발행을 거부합니다.
+현재 계약의 `report --run`과 history 로더는 저장된 정책 snapshot, 원시 결과의 fingerprint와 중앙 재판정 결과가 summary와 일치하는지 확인합니다. fingerprint는 원시 JSON을 모델로 읽기 전에 확인합니다. 불일치한 산출물은 보고서로 다시 발행하지 않습니다. 결과 로더는 `decision_contract_version=3`, `measurement_contract_version=llm-usage-scenario-v7`, `release-obligations-v11` 조합을 검증합니다. 측정 v6에서 도입한 확정 제품 실패의 judge 생략과 필수 대상 수를 유지하며, 측정 v7은 로컬에서 검증한 위치의 `verified_location` 저장 표현과 unchecked 집계를 구분합니다. 채점 v11은 응답 존재 여부를 검사하는 규칙의 이름을 `response_availability`로 명확히 합니다. decision v2의 보관 결과와 decision v3/측정 v6·v7/채점 v10 결과는 알려진 버전 조합과 원시 fingerprint를 확인한 후 history에서 제외합니다. 과거 판정을 새 행동별 관측 규칙으로 재계산하거나 현재 모델로 투영하지 않으며, `report --run`도 구형 결과의 재발행을 거부합니다.
 
 과거 `summary.json`·`raw_results.jsonl`·`report.md`는 당시 계약의 기록으로 보존합니다. 구형 계약의 재발행이나 현재 자격 판정은 거부하며, 과거 결과는 당시 저장된 보고서로 확인합니다. 현재 계약과 과거 계약의 결과를 섞거나 필수 버전을 제거한 입력도 거부합니다. 현재 보고서 재생성은 원본 summary·raw 결과를 변경하거나 모델 호출·외부 효과를 다시 실행하지 않습니다. 기존 생성 계보와 과거 수치의 원본도 유지합니다. 최신 run 포인터는 release 판정의 PASS·FAIL과 관계없이 최종 산출물 저장까지 완료된 가장 최근 실행을 가리킵니다. 중단되거나 후처리에 실패한 실행은 포인터를 바꾸지 않습니다.
 
@@ -485,14 +513,14 @@ Slack 성공 의무에는 `status=success`인 receipt, 내부 `status=sent`, 일
 | `reference_coverage` | 0.20 | 0.10 | 0 |
 | `citation_traceability` | 0.20 | 0.05 | 0 |
 | `tool_choice` | 0.15 | 0.25 | 0.30 |
-| `format_language` | 0.05 | 0.10 | 0.10 |
+| `response_availability` | 0.05 | 0.10 | 0.10 |
 | `llm_judge` | 0.20 | 0.15 | 0.15 |
 
 `tool_action` 이외의 사례는 두 인용 플래그와 관계없이 `general`을 선택합니다. `tool_action`은 `require_official_citation` 또는 `require_local_citation`이 참이면 `action_with_citations`, 둘 다 거짓이면 `action_without_citations`를 선택합니다. 실제 호출 도구·검색 결과·응답의 인용 유무는 이 선택을 바꾸지 않습니다.
 
 `hybrid`는 공식·업로드 근거를 사용하는 분류이며 비교 문구를 필수로 요구하지 않습니다. 규칙의 답변 품질은 명시적인 `must_include`·`must_not_include`를 검사하고, 질문·oracle이 요구한 설명·비교·인용·변환의 충족 여부는 의미 judge가 평가합니다. 특정 비교 단어를 덧붙이거나 검색 hit의 경계를 바꿔 점수가 변하는 휴리스틱은 사용하지 않습니다. 요청한 원문 인용·복사는 정확성과 완전성을 평가하며 복사 자체로 감점하지 않습니다.
 
-규칙 점수의 `format_language`는 기존 키를 유지하며, 구조화된 `runtime_errors`·`response_errors`가 없고 표시할 답변이나 추가 입력 안내가 있는지 확인합니다. 답변에 오류 메시지가 인용됐다는 이유나 한글 문자가 없다는 이유로 실패를 판정하지 않습니다. 요청한 형식·언어와 원문 복사 조건의 의미적 충족은 질문과 oracle을 받은 judge가 평가합니다. 한국어 요청이라도 명시한 출력 언어와 원문 보존 조건을 우선하며, 설명을 요구한 요청의 언어 불일치는 계속 judge의 감점 대상입니다.
+규칙 점수의 `response_availability`는 구조화된 `runtime_errors`·`response_errors`가 없고 표시할 답변이나 추가 입력 안내가 있는지 확인합니다. 답변에 오류 메시지가 인용됐다는 이유나 한글 문자가 없다는 이유로 실패를 판정하지 않습니다. 요청한 형식·언어와 원문 복사 조건의 의미적 충족은 질문과 oracle을 받은 judge의 `format_language`가 평가합니다. 한국어 요청이라도 명시한 출력 언어와 원문 보존 조건을 우선하며, 설명을 요구한 요청의 언어 불일치는 계속 judge의 감점 대상입니다. 현재 가중치 설정과 사례 override는 규칙의 구형 이름인 `format_language`를 거절하며 자동 변환하지 않습니다.
 
 case의 `weight_override`는 위 여섯 키 중 변경할 축만 담는 사전입니다. 전체 생략·`null`·`{}`는 변경 없음, 축 누락은 프로필 값 유지, 명시적인 `0`은 해당 축의 점수 기여 제거를 뜻합니다. 축 값의 `null`은 오류입니다. 예를 들어 `{"citation_traceability": 0.35, "llm_judge": 0.1}`은 다른 네 축을 유지한 뒤 전체를 정규화합니다. `llm_judge=0`은 judge 실행이나 필수 품질 gate를 비활성화하지 않으며, judge 점수가 없으면 composite은 계속 `null`입니다.
 
@@ -561,9 +589,9 @@ history 리포터는 현재 판정·측정 계약과 저장 증거를 검증한 
 
 같은 경로의 fixture를 덮어써도 내용이나 첨부 bytes가 달라지면 자동 비교되지 않습니다. 비교 fingerprint 정보가 일부만 있는 현재 run은 자기 자신만 표시합니다. 사용량 계약 v3는 Decisions의 API 경로별 가격표와 무료 출력 차원을 반영하며, 비용 관측률을 계획 사례 전체를 기준으로 계산합니다. 비용 정의가 다른 v1·v2와 별도 baseline을 만듭니다. 과거 JSON을 새 계약으로 자동 승격하거나 사용량을 재계산하지 않습니다.
 
-현재 채점 계약은 `release-obligations-v10`이며 `summary.json`의 `audit_metrics.scoring_contract_version`에 기록합니다. 세 프로필 설정 전체와 이 버전을 `evaluation_fingerprint`에 포함합니다. 전체 승인 사례·비용 관측·행동 의무를 필수 조건으로 적용하고, 구조화된 실행 결과와 질문·oracle의 요구를 평가합니다. v10은 행동별 성공 증거와 별도 정책 위반을 구분하며 제품 실패가 확정된 사례의 judge를 생략합니다. release 통과에는 여전히 judge의 유효한 품질 합격이 필요합니다. 현재 턴의 HTTP 실행 ID와 완전한 실행 기록으로 저장 누락을 확인하며, 공식 출처는 런타임의 공통 URL 정책으로 판정합니다. 기존 가중치·수치 통과선은 유지하지만 판정과 judge 실행 의미가 달라졌으므로 v9를 포함한 이전 채점 계약과 자동 비교하지 않습니다. 실행 계약 v2는 사전에 선언한 준비 턴의 부분 결과를 후속 질문으로 연결합니다.
+현재 채점 계약은 `release-obligations-v11`이며 `summary.json`의 `audit_metrics.scoring_contract_version`에 기록합니다. 세 프로필 설정 전체와 이 버전을 `evaluation_fingerprint`에 포함합니다. 전체 승인 사례·비용 관측·행동 의무를 필수 조건으로 적용하고, 구조화된 실행 결과와 질문·oracle의 요구를 평가합니다. 행동별 성공 증거와 별도 정책 위반을 구분하며 제품 실패가 확정된 사례의 judge를 생략합니다. release 통과에는 여전히 judge의 유효한 품질 합격이 필요합니다. 현재 턴의 HTTP 실행 ID와 완전한 실행 기록으로 저장 누락을 확인하며, 공식 출처는 런타임의 공통 URL 정책으로 판정합니다. v11은 규칙 점수와 가중치 키를 `format_language`에서 `response_availability`로 바꾸며 수식·가중치·수치 통과선과 judge의 `format_language` 의미는 유지합니다. 저장된 평가 축의 계약이 달라졌으므로 v10을 포함한 이전 채점 계약과 자동 비교하지 않습니다. 실행 계약 v2는 사전에 선언한 준비 턴의 부분 결과를 후속 질문으로 연결합니다.
 
-보관된 decision v2의 알려진 조합은 측정 v3와 실행 v1/채점 v6 또는 실행 v2/채점 v7·v8·v9, 측정 v4·v5와 실행 v2/채점 v9입니다. decision v3/측정 v6/실행 v2/채점 v10도 당시 기록으로 보존합니다. 이 조합들은 원시 결과 fingerprint, run ID와 판정 계약 버전을 확인한 뒤 history에서 제외하며, stale latest 포인터가 있어도 새 비교의 기준으로 선택하지 않습니다. 실행·채점 버전의 혼합, 누락, 알 수 없는 값은 오류입니다. 과거 원시 결과가 손상됐다는 사실도 이력 제외로 숨기지 않습니다.
+보관된 decision v2의 알려진 조합은 측정 v3와 실행 v1/채점 v6 또는 실행 v2/채점 v7·v8·v9, 측정 v4·v5와 실행 v2/채점 v9입니다. decision v3/측정 v6·v7/실행 v2/채점 v10도 당시 기록으로 보존합니다. 이 조합들은 원시 결과 fingerprint, run ID와 판정 계약 버전을 확인한 뒤 history에서 제외하며, stale latest 포인터가 있어도 새 비교의 기준으로 선택하지 않습니다. 실행·채점 버전의 혼합, 누락, 알 수 없는 값은 오류입니다. 과거 원시 결과가 손상됐다는 사실도 이력 제외로 숨기지 않습니다.
 
 `suite_fingerprint`는 원시 fixture 파일 전체의 bytes hash와 다릅니다. 같은 평가 의미라도 override의 직렬화 형태가 달라지면 suite fingerprint가 달라질 수 있습니다. 승인된 release candidate·명세의 원시 bytes hash는 별도 검증하며, 가중치 모델 변경을 이유로 보관 원본이나 승인 hash를 다시 쓰지 않습니다. 과거 summary의 채점 버전·가중치·fingerprint를 현재 값으로 채우거나 결과를 다시 계산하지 않습니다. 같은 측정 계약의 과거 결과도 원래 result fingerprint를 검증한 뒤 읽으며, 새 비교 baseline과는 분리합니다.
 
