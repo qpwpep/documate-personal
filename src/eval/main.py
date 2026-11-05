@@ -153,6 +153,26 @@ def command_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_diagnose(args: argparse.Namespace) -> int:
+    from .validation_diagnostics import diagnose_run
+
+    judge = None
+    if args.judge:
+        from .diagnostic_review import DiagnosticReviewJudge
+
+        benchmark_env = load_benchmark_cli_env_settings(args.config)
+        config = _load_config_with_env_overrides(args.config, benchmark_env=benchmark_env)
+        settings = get_settings()
+        judge = DiagnosticReviewJudge(
+            model_name=config.judge_model, api_key=settings.openai_api_key,
+            max_input_tokens=config.judge_max_input_tokens, max_output_tokens=config.judge_max_output_tokens,
+        )
+    diagnose_run(args.run, args.out, sample_per_cause=args.sample_per_cause, judge=judge)
+    print(f"Diagnostic review: {args.out.resolve()}")
+    print("This review does not change the saved benchmark verdicts.")
+    return 0
+
+
 def command_history(args: argparse.Namespace) -> int:
     validate_history_targets(args.track, args.readme, args.svg)
     latest, comparable_runs = refresh_history_report(
@@ -251,6 +271,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser_report = subparsers.add_parser("report", help="Regenerate markdown report from an existing run")
     parser_report.add_argument("--run", type=Path, required=True, help="Run directory path")
     parser_report.set_defaults(func=command_report)
+
+    parser_diagnose = subparsers.add_parser(
+        "diagnose", help="Export observed failure causes and review samples without changing a run",
+    )
+    parser_diagnose.add_argument("--run", type=Path, required=True, help="Completed run directory")
+    parser_diagnose.add_argument("--out", type=Path, required=True, help="New diagnostic JSON outside the source run")
+    parser_diagnose.add_argument("--sample-per-cause", type=int, default=2,
+                                 help="Maximum review samples per observed cause (default: 2)")
+    parser_diagnose.add_argument("--judge", action="store_true",
+                                 help="Independently review sampled candidate bodies using the configured model")
+    parser_diagnose.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH,
+                                 help="Benchmark config for optional independent review")
+    parser_diagnose.set_defaults(func=command_diagnose)
 
     parser_history = subparsers.add_parser(
         "history",
