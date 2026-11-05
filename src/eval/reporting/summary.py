@@ -29,7 +29,7 @@ EXECUTION_CONTRACT_VERSION = "shared-client-scenario-v2"
 MEASUREMENT_CONTRACT_VERSION = "llm-usage-scenario-v7"
 # Weight profiles are fixed before execution; pure actions exclude citation axes.
 # This scoring contract establishes its own comparison baseline.
-SCORING_CONTRACT_VERSION = "release-obligations-v10"
+SCORING_CONTRACT_VERSION = "release-obligations-v11"
 
 
 def _fingerprint(value: Any) -> str:

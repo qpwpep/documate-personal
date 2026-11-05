@@ -18,7 +18,7 @@ CaseScenario = Literal[
 
 WeightKey = Literal[
     "answer_quality", "reference_coverage", "citation_traceability",
-    "tool_choice", "format_language", "llm_judge",
+    "tool_choice", "response_availability", "llm_judge",
 ]
 WeightProfileId = Literal["general", "action_with_citations", "action_without_citations"]
 
@@ -224,7 +224,7 @@ class ScoreWeights(BaseModel):
     reference_coverage: WeightValue
     citation_traceability: WeightValue
     tool_choice: WeightValue
-    format_language: WeightValue
+    response_availability: WeightValue
     llm_judge: WeightValue
 
     @model_validator(mode="after")
@@ -245,15 +245,15 @@ class WeightProfiles(BaseModel):
 
     general: ScoreWeights = Field(default_factory=lambda: ScoreWeights(
         answer_quality=0.20, reference_coverage=0.20, citation_traceability=0.20,
-        tool_choice=0.15, format_language=0.05, llm_judge=0.20,
+        tool_choice=0.15, response_availability=0.05, llm_judge=0.20,
     ))
     action_with_citations: ScoreWeights = Field(default_factory=lambda: ScoreWeights(
         answer_quality=0.35, reference_coverage=0.10, citation_traceability=0.05,
-        tool_choice=0.25, format_language=0.10, llm_judge=0.15,
+        tool_choice=0.25, response_availability=0.10, llm_judge=0.15,
     ))
     action_without_citations: ScoreWeights = Field(default_factory=lambda: ScoreWeights(
         answer_quality=0.40, reference_coverage=0.0, citation_traceability=0.0,
-        tool_choice=0.30, format_language=0.10, llm_judge=0.15,
+        tool_choice=0.30, response_availability=0.10, llm_judge=0.15,
     ))
 
     @field_validator("action_without_citations")

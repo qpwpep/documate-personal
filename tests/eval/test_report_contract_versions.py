@@ -55,6 +55,35 @@ def test_current_report_roundtrip_preserves_decision_and_raw_cost(tmp_path):
     assert report.current_results == results
 
 
+def test_response_availability_uses_a_new_scoring_contract():
+    summary = _summary([_case_result()])
+
+    assert summary.audit_metrics["scoring_contract_version"] == "release-obligations-v11"
+
+
+def test_history_preserves_v10_rule_names_without_reinterpreting_scores(tmp_path):
+    pair = _case_result()
+    summary = _summary([pair]).model_dump(mode="json")
+    result = pair[1].model_dump(mode="json")
+    summary["audit_metrics"]["scoring_contract_version"] = "release-obligations-v10"
+    for scores in [result["rule_scores"], result["effective_weights"], *summary["weight_profiles"].values()]:
+        scores["format_language"] = scores.pop("response_availability")
+    summary["results_fingerprint"] = raw_results_fingerprint([result])
+    directory = tmp_path / summary["run_id"]
+    _save_payloads(directory, summary, [result])
+    before = {path: path.read_bytes() for path in directory.iterdir()}
+
+    assert load_history_runs(tmp_path) == []
+    with pytest.raises(ValueError, match="scoring contract"):
+        load_report_inputs(directory)
+    assert {path: path.read_bytes() for path in before} == before
+
+    result["cost_usd"] = 100
+    _save_payloads(directory, summary, [result])
+    with pytest.raises(ValueError, match="fingerprint mismatch"):
+        load_history_runs(tmp_path)
+
+
 def test_current_report_cannot_fill_missing_call_observations_before_fingerprint_check(tmp_path):
     pair = _case_result()
     summary = _summary([pair]).model_dump(mode="json")

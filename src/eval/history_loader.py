@@ -84,7 +84,12 @@ def _is_previous_contract_summary(path: Path, payload: dict[str, object]) -> boo
 
     decision = payload.get("decision_contract_version")
     measurement = payload.get("measurement_contract_version")
-    if decision != 2 and not (decision == 3 and measurement == "llm-usage-scenario-v6"):
+    audit = payload.get("audit_metrics")
+    scoring = audit.get("scoring_contract_version") if isinstance(audit, dict) else None
+    if decision != 2 and not (decision == 3 and (
+        measurement == "llm-usage-scenario-v6"
+        or (measurement == "llm-usage-scenario-v7" and scoring == "release-obligations-v10")
+    )):
         return False
     known = {
         "llm-usage-scenario-v3": (
@@ -97,10 +102,11 @@ def _is_previous_contract_summary(path: Path, payload: dict[str, object]) -> boo
         "llm-usage-scenario-v5": (("shared-client-scenario-v2", "release-obligations-v9"),),
     }
     if decision == 3:
-        known = {"llm-usage-scenario-v6": (("shared-client-scenario-v2", "release-obligations-v10"),)}
-    audit = payload.get("audit_metrics")
-    versions = (payload.get("execution_contract_version"),
-                audit.get("scoring_contract_version") if isinstance(audit, dict) else None)
+        known = {
+            "llm-usage-scenario-v6": (("shared-client-scenario-v2", "release-obligations-v10"),),
+            "llm-usage-scenario-v7": (("shared-client-scenario-v2", "release-obligations-v10"),),
+        }
+    versions = (payload.get("execution_contract_version"), scoring)
     if not isinstance(measurement, str) or versions not in known.get(measurement, ()):
         raise ValueError("unknown or mixed historical decision contract")
     raw = [json.loads(line) for line in (path.parent / "raw_results.jsonl").read_text(encoding="utf-8").splitlines()

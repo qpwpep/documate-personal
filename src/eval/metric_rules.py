@@ -167,18 +167,17 @@ def score_reference_coverage(
     return sum(bool(unit.refs) and all(ref in traceable for ref in unit.refs) for unit in units) / len(units)
 
 
-def score_format_language(
+def score_response_availability(
     *,
-    case: BenchmarkCase,
     runtime_errors: list[str],
     response_errors: list[str],
     response_text: str,
 ) -> float:
     """Check response availability without interpreting the answer as diagnostics.
 
-    This compatibility metric uses structured runtime/response errors. The
-    semantic judge evaluates requested structure and language from the query
-    and oracle, including literal copies and explicitly requested languages.
+    This rule uses structured runtime/response errors. The semantic judge
+    evaluates requested structure and language from the query and oracle,
+    including literal copies and explicitly requested languages.
     """
     if runtime_errors or response_errors:
         return 0.0
@@ -208,7 +207,7 @@ def compute_rule_scores(
         "reference_coverage": score_reference_coverage(case=case, response=response, observed_hits=observed_hits, validator_reason=validator_reason, evidence_scope=evidence_scope),
         "citation_traceability": score_citation_traceability(case=case, response=response, observed_hits=observed_hits, called_tools=called_tools, evidence_scope=evidence_scope),
         "tool_choice": score_tool_choice(case, called_tools, slack_delivery_required=slack_delivery_required, slack_delivery_status=slack_delivery_status, save_outcome_verified=save_outcome_verified),
-        "format_language": score_format_language(case=case, runtime_errors=runtime_errors, response_errors=response_errors, response_text=response_text),
+        "response_availability": score_response_availability(runtime_errors=runtime_errors, response_errors=response_errors, response_text=response_text),
     }
 
 

@@ -40,7 +40,7 @@ def _scores(query, text=None, *, runtime_errors=(), response_errors=(), turn_res
 def test_requested_error_log_is_content_not_a_runtime_failure(message):
     text = f"2026-10-23 ERROR {message}"
 
-    assert _scores(f"Copy this log exactly: {text}", text)["format_language"] == 1.0
+    assert _scores(f"Copy this log exactly: {text}", text)["response_availability"] == 1.0
 
 
 @pytest.mark.parametrize("query, text", [
@@ -48,7 +48,7 @@ def test_requested_error_log_is_content_not_a_runtime_failure(message):
     ("준비가 끝났다는 뜻의 영어 문장 하나로 답해줘.", "Everything is ready."),
 ])
 def test_query_language_does_not_override_the_requested_output(query, text):
-    assert _scores(query, text)["format_language"] == 1.0
+    assert _scores(query, text)["response_availability"] == 1.0
 
 
 @pytest.mark.parametrize("errors", [
@@ -56,24 +56,31 @@ def test_query_language_does_not_override_the_requested_output(query, text):
     {"response_errors": ["SSE final_response missing"]},
 ])
 def test_structured_failure_is_not_hidden_by_a_plausible_answer(errors):
-    assert _scores("준비 상태를 알려줘.", "준비됐습니다.", **errors)["format_language"] == 0.0
+    assert _scores("준비 상태를 알려줘.", "준비됐습니다.", **errors)["response_availability"] == 0.0
 
 
 @pytest.mark.parametrize("status, code", [("failed", "internal_error"), ("refused", "model_refusal")])
 def test_failed_turn_has_no_scorable_answer(status, code):
     result = TurnResult(status=status, problem=make_problem(code, "synthesis"))
 
-    assert _scores("준비 상태를 알려줘.", turn_result=result)["format_language"] == 0.0
+    assert _scores("준비 상태를 알려줘.", turn_result=result)["response_availability"] == 0.0
 
 
 def test_clarification_may_quote_the_error_log_it_needs():
     result = TurnResult(status="needs_input", message="Please provide the request timeout log.")
 
-    assert _scores("Analyze the log.", turn_result=result)["format_language"] == 1.0
+    assert _scores("Analyze the log.", turn_result=result)["response_availability"] == 1.0
 
 
-def test_empty_output_is_not_a_valid_format():
-    assert _scores("준비 상태를 알려줘.")["format_language"] == 0.0
+def test_empty_output_is_not_available():
+    assert _scores("준비 상태를 알려줘.")["response_availability"] == 0.0
+
+
+def test_response_availability_does_not_claim_semantic_format_compliance():
+    scores = _scores("영어로 답해줘.", "준비됐습니다.")
+
+    assert scores["response_availability"] == 1.0
+    assert "format_language" not in scores
 
 
 def test_judge_retains_expected_partial_setup_separately_from_final_answer():

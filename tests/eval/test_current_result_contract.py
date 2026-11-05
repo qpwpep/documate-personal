@@ -132,7 +132,14 @@ def test_previous_location_measurement_is_preserved_without_reloading_its_checks
     pair = _case_result()
     result = pair[1].model_dump(mode="json")
     summary = _summary([pair]).model_dump(mode="json")
-    summary["measurement_contract_version"] = "llm-usage-scenario-v6"
+    result["decision_contract_version"] = 3
+    summary.update(
+        decision_contract_version=3, execution_contract_version="shared-client-scenario-v2",
+        measurement_contract_version="llm-usage-scenario-v6",
+    )
+    summary["audit_metrics"]["scoring_contract_version"] = "release-obligations-v10"
+    for scores in [result["rule_scores"], result["effective_weights"], *summary["weight_profiles"].values()]:
+        scores["format_language"] = scores.pop("response_availability")
     summary["results_fingerprint"] = raw_results_fingerprint([result])
     run_dir = tmp_path / summary["run_id"]
     run_dir.mkdir()
